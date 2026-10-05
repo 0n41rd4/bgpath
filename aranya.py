@@ -8,12 +8,13 @@ response in SQLite, and show the normalized field. Nothing else yet.
 from __future__ import annotations
 
 import argparse
-import json
 import sqlite3
 import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+
+import ripe
 
 SOURCE = "ripestat.network-info"
 URL = "https://stat.ripe.net/data/network-info/data.json?resource={ip}"
@@ -68,17 +69,6 @@ def save_fetch(
     conn.commit()
 
 
-def parse_network_info(body: str) -> dict:
-    payload = json.loads(body)
-    if not isinstance(payload, dict):
-        return {"prefix": None, "asns": []}
-    data = payload.get("data") or {}
-    if not isinstance(data, dict):
-        return {"prefix": None, "asns": []}
-    asns = data.get("asns")
-    return {"prefix": data.get("prefix"), "asns": asns if isinstance(asns, list) else []}
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="aranya phase 0 prototype")
     parser.add_argument("ip", help="IP address to look up")
@@ -96,8 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        result = parse_network_info(body)
-    except (json.JSONDecodeError, ValueError) as exc:
+        result = ripe.network_info(body)
+    except ValueError as exc:
         print(f"{SOURCE}: parse error: {exc}", file=sys.stderr)
         return 1
 
