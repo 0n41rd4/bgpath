@@ -12,7 +12,7 @@ import json
 import time
 
 import compare
-import normalize
+import observe
 import sources
 import store
 
@@ -46,7 +46,7 @@ def run_adapter(
         return f"error ({error})", None
 
     try:
-        parsed, observations = normalize.normalize(adapter, ip, body)
+        parsed, observations = observe.observe(adapter, ip, body)
     except ValueError as exc:
         return f"parse error ({exc})", None
 
