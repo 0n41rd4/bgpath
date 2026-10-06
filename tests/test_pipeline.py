@@ -63,6 +63,25 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(parsed["peeringdb.net"]["net_id"], 433)
         self.assertEqual(parsed["rdns.ptr"]["hostname"], "dns.google")
 
+    def test_observations_written_offline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
+            asns = conn.execute(
+                "SELECT value FROM observations WHERE topic = 'ownership' AND key = 'asn'"
+            ).fetchall()
+            locations = conn.execute(
+                "SELECT COUNT(*) FROM v_locations WHERE ip = '8.8.8.8'"
+            ).fetchone()
+            untraced = conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE fetch_id IS NULL"
+            ).fetchone()
+            conn.close()
+
+        self.assertTrue(asns)
+        self.assertGreater(locations[0], 0)
+        self.assertEqual(untraced[0], 0)
+
     def test_missing_dependencies_skip(self):
         def failing_fetch(url):
             return None, None, "offline failure"

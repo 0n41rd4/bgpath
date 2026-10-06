@@ -1,8 +1,9 @@
-"""Adapter registry: what to fetch, how to parse.
+"""Adapter registry: what to fetch, how to parse, how to observe.
 
 Each adapter describes a source with its dependency needs, a URL builder (or a
-custom fetch callable), a structured parser, and how to contribute derived
-context (ASN, hostname, net_id) to downstream adapters.
+custom fetch callable), a structured parser, how to contribute derived context
+(ASN, hostname, net_id) to downstream adapters, and how to map the parsed
+result into normalized observations (topic/key/value) with provenance.
 """
 
 from __future__ import annotations
@@ -100,111 +101,243 @@ def _first_hostname(parsed: dict) -> object:
     return hostnames[0] if isinstance(hostnames, list) and hostnames else None
 
 
+def _obs(topic: str, key: str, value: object) -> dict:
+    return {"topic": topic, "key": key, "value": value}
+
+
+def _network_info_obs(ip: str, parsed: dict) -> list[dict]:
+    obs = [_obs("ownership", "prefix", parsed["prefix"])]
+    obs.extend(_obs("ownership", "asn", asn) for asn in parsed["asns"])
+    return obs
+
+
+def _geoloc_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("location", "claim", loc) for loc in parsed["locations"]]
+
+
+def _as_overview_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("ownership", "asn", parsed["asn"]),
+        _obs("ownership", "holder", parsed["holder"]),
+        _obs("ownership", "block", parsed["block"]),
+        _obs("routing", "announced", parsed["announced"]),
+    ]
+
+
+def _asn_neighbours_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("neighbours", "counts", parsed["neighbour_counts"]),
+        _obs("neighbours", "list", parsed["neighbours"]),
+    ]
+
+
+def _ipmap_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("location", "claim", loc) for loc in parsed["locations"]]
+
+
+def _rdns_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("identity", "hostname", parsed["hostname"])]
+
+
+def _cymru_obs(ip: str, parsed: dict) -> list[dict]:
+    obs: list[dict] = []
+    for record in parsed["records"]:
+        obs.append(_obs("ownership", "asn", record["asn"]))
+        obs.append(_obs("ownership", "prefix", record["prefix"]))
+        obs.append(_obs("country", "country", record["country"]))
+    return obs
+
+
+def _rdap_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("ownership", "handle", parsed["handle"]),
+        _obs("ownership", "name", parsed["name"]),
+        _obs("ownership", "range", parsed["range"]),
+        _obs("ownership", "status", parsed["status"]),
+        _obs("country", "country", parsed["country"]),
+    ]
+
+
+def _internetdb_obs(ip: str, parsed: dict) -> list[dict]:
+    obs = [_obs("identity", "hostname", hostname) for hostname in parsed["hostnames"]]
+    obs.append(_obs("identity", "ports", parsed["ports"]))
+    obs.append(_obs("identity", "cpes", parsed["cpes"]))
+    obs.append(_obs("identity", "vulns", parsed["vulns"]))
+    return obs
+
+
+def _globalping_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("latency", "probe", result) for result in parsed["results"]]
+
+
+def _peeringdb_net_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("directory", "net_id", parsed["net_id"]),
+        _obs("ownership", "name", parsed["name"]),
+        _obs("directory", "website", parsed["website"]),
+        _obs("directory", "info_type", parsed["info_type"]),
+    ]
+
+
+def _peeringdb_netfac_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("facility", "facility", facility) for facility in parsed["facilities"]]
+
+
+def _peeringdb_netixlan_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("ix", "ixlan", item) for item in parsed["ix"]]
+
+
+def _crtsh_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("names", "certificate", cert) for cert in parsed["certificates"]]
+
+
 SOURCES: list[dict] = [
     {
         "id": "ripestat.network-info",
+        "upstream": "RIPE NCC",
+        "evidence_class": "reported",
         "needs": [],
         "url": lambda ctx: f"https://stat.ripe.net/data/network-info/data.json?resource={ctx['ip']}",
         "parse": ripe.network_info,
+        "observations": _network_info_obs,
         "provides": lambda parsed: {"asn": _first_asn(parsed)},
     },
     {
         "id": "ripestat.geoloc",
+        "upstream": "RIPE NCC (embeds MaxMind/IP2Location)",
+        "evidence_class": "reported",
         "needs": [],
         "url": lambda ctx: f"https://stat.ripe.net/data/geoloc/data.json?resource={ctx['ip']}",
         "parse": ripe.geoloc,
+        "observations": _geoloc_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "ripestat.as-overview",
+        "upstream": "RIPE NCC (RIS)",
+        "evidence_class": "reported",
         "needs": ["asn"],
         "url": lambda ctx: f"https://stat.ripe.net/data/as-overview/data.json?resource=AS{ctx['asn']}",
         "parse": ripe.as_overview,
+        "observations": _as_overview_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "ripestat.asn-neighbours",
+        "upstream": "RIPE NCC (RIS)",
+        "evidence_class": "reported",
         "needs": ["asn"],
         "url": lambda ctx: f"https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS{ctx['asn']}",
         "parse": ripe.asn_neighbours,
+        "observations": _asn_neighbours_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "ipmap",
+        "upstream": "RIPE NCC (Atlas + rDNS)",
+        "evidence_class": "inferred",
         "needs": [],
         "url": lambda ctx: f"https://ipmap.ripe.net/api/v1/locate/{ctx['ip']}",
         "parse": ripe.ipmap,
+        "observations": _ipmap_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "cymru.origin",
+        "upstream": "Team Cymru (BGP)",
+        "evidence_class": "observed-passive",
         "needs": [],
         "url": lambda ctx: (
             f"https://dns.google/resolve?name={_reverse(ctx['ip'])}.origin.asn.cymru.com&type=TXT"
         ),
         "parse": parsers.cymru,
+        "observations": _cymru_obs,
         "provides": lambda parsed: {
             "asn": parsed["records"][0]["asn"] if parsed["records"] else None
         },
     },
     {
         "id": "rdap",
+        "upstream": "RIR",
+        "evidence_class": "reported",
         "needs": [],
         "url": lambda ctx: f"https://rdap.org/ip/{ctx['ip']}",
         "parse": parsers.rdap,
+        "observations": _rdap_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "rdns.ptr",
+        "upstream": "DNS",
+        "evidence_class": "reported",
         "needs": [],
         "url": lambda ctx: f"PTR {ctx['ip']}",
         "fetch": _fetch_rdns,
         "parse": parsers.rdns,
+        "observations": _rdns_obs,
         "provides": lambda parsed: {"hostname": parsed["hostname"]},
     },
     {
         "id": "internetdb",
+        "upstream": "Shodan",
+        "evidence_class": "observed-passive",
         "needs": [],
         "url": lambda ctx: f"https://internetdb.shodan.io/{ctx['ip']}",
         "parse": parsers.internetdb,
+        "observations": _internetdb_obs,
         "provides": lambda parsed: {"hostname": _first_hostname(parsed)},
     },
     {
         "id": "globalping.ping",
+        "upstream": "Globalping",
+        "evidence_class": "observed-active",
         "needs": [],
         "url": lambda ctx: GLOBALPING_URL,
         "fetch": _fetch_globalping,
         "parse": parsers.globalping,
+        "observations": _globalping_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "peeringdb.net",
+        "upstream": "PeeringDB",
+        "evidence_class": "reported",
         "needs": ["asn"],
         "url": lambda ctx: f"https://www.peeringdb.com/api/net?asn={ctx['asn']}",
         "parse": parsers.peeringdb_net,
+        "observations": _peeringdb_net_obs,
         "provides": lambda parsed: {"net_id": parsed["net_id"]},
     },
     {
         "id": "peeringdb.netfac",
+        "upstream": "PeeringDB",
+        "evidence_class": "reported",
         "needs": ["net_id"],
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/netfac?net_id={ctx['net_id']}",
         "parse": parsers.peeringdb_netfac,
+        "observations": _peeringdb_netfac_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "peeringdb.netixlan",
+        "upstream": "PeeringDB",
+        "evidence_class": "reported",
         "needs": ["net_id"],
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/netixlan?net_id={ctx['net_id']}",
         "parse": parsers.peeringdb_netixlan,
+        "observations": _peeringdb_netixlan_obs,
         "provides": lambda parsed: {},
     },
     {
         "id": "crtsh",
+        "upstream": "CT logs",
+        "evidence_class": "reported",
         "needs": ["hostname"],
         "url": lambda ctx: f"https://crt.sh/?q={ctx['hostname']}&output=json",
         "parse": parsers.crtsh,
+        "observations": _crtsh_obs,
         "provides": lambda parsed: {},
     },
 ]

@@ -11,6 +11,7 @@ import argparse
 import json
 import time
 
+import normalize
 import sources
 import store
 
@@ -33,19 +34,34 @@ def run_adapter(
         status, body, error = adapter["fetch"](ip, context)
     else:
         status, body, error = sources.http_get(url)
-    store.save_fetch(conn, adapter["id"], url, status, body, error)
+    fetch_id = store.save_fetch(conn, adapter["id"], url, status, body, error)
 
     if error:
         return f"error ({error})", None
 
     try:
-        parsed = adapter["parse"](body)
+        parsed, observations = normalize.normalize(adapter, ip, body)
     except ValueError as exc:
         return f"parse error ({exc})", None
 
     for key, value in adapter["provides"](parsed).items():
         if value is not None:
             context[key] = value
+
+    for obs in observations:
+        if obs["value"] is None:
+            continue
+        store.save_observation(
+            conn,
+            ip,
+            adapter["id"],
+            adapter["upstream"],
+            adapter["evidence_class"],
+            obs["topic"],
+            obs["key"],
+            obs["value"],
+            fetch_id,
+        )
 
     return "ok", parsed
 
@@ -74,6 +90,31 @@ def run_all(conn, ip: str, fetch=None) -> dict:
     return statuses, parsed_results
 
 
+def _fmt(value: object) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def print_summary(conn, ip: str) -> None:
+    print("\nobservations:")
+    last_topic = None
+    for topic, source, key, value in conn.execute(
+        "SELECT topic, source, key, value FROM v_observations WHERE ip = ?", (ip,)
+    ):
+        if topic != last_topic:
+            print(f"  [{topic}]")
+            last_topic = topic
+        print(f"    {source:<22} {key:<12} {_fmt(json.loads(value))}")
+
+    print("\nlocations (v_locations):")
+    for source, city, country, latitude, longitude in conn.execute(
+        "SELECT source, city, country, latitude, longitude FROM v_locations WHERE ip = ?",
+        (ip,),
+    ):
+        print(f"    {source:<22} {city} | {country} | {latitude} | {longitude}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", help="IP address to look up")
@@ -81,19 +122,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     conn = store.open_store(args.db)
-    statuses, parsed = run_all(conn, args.ip)
-    conn.close()
+    statuses, _ = run_all(conn, args.ip)
 
     print(f"aranya {args.ip}\n")
     print("sources:")
     for adapter in sources.SOURCES:
         print(f"  {statuses[adapter['id']]:<12} {adapter['id']}")
 
-    print("\nparsed:")
-    for adapter in sources.SOURCES:
-        if parsed.get(adapter["id"]) is not None:
-            print(f"  {adapter['id']}: {json.dumps(parsed[adapter['id']], ensure_ascii=False)}")
-
+    print_summary(conn, args.ip)
+    conn.close()
     return 0
 
 
