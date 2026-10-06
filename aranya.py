@@ -17,11 +17,19 @@ import store
 DEFAULT_DB = "aranya.db"
 
 
-def run_adapter(conn, adapter: dict, ip: str, context: dict) -> tuple[str, object]:
+def run_adapter(
+    conn,
+    adapter: dict,
+    ip: str,
+    context: dict,
+    fetch=None,
+) -> tuple[str, object]:
     url = adapter["url"](context)
-    if adapter.get("delay"):
+    if adapter.get("delay") and fetch is None:
         time.sleep(adapter["delay"])
-    if "fetch" in adapter:
+    if fetch is not None:
+        status, body, error = fetch(url)
+    elif "fetch" in adapter:
         status, body, error = adapter["fetch"](ip, context)
     else:
         status, body, error = sources.http_get(url)
@@ -42,7 +50,7 @@ def run_adapter(conn, adapter: dict, ip: str, context: dict) -> tuple[str, objec
     return "ok", parsed
 
 
-def run_all(conn, ip: str) -> dict:
+def run_all(conn, ip: str, fetch=None) -> dict:
     context: dict = {"ip": ip}
     remaining = list(sources.SOURCES)
     statuses: dict[str, str] = {}
@@ -56,7 +64,7 @@ def run_all(conn, ip: str) -> dict:
                 continue
             remaining.remove(adapter)
             progressed = True
-            status, parsed = run_adapter(conn, adapter, ip, context)
+            status, parsed = run_adapter(conn, adapter, ip, context, fetch)
             statuses[adapter["id"]] = status
             parsed_results[adapter["id"]] = parsed
 
