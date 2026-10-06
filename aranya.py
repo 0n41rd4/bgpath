@@ -1,97 +1,85 @@
 #!/usr/bin/env python3
-"""aranya - phase 0 prototype.
+"""aranya - evidence layer over public internet-infrastructure data.
 
-Raw-minimal end-to-end slice: fetch one source for one IP, keep the raw
-response in SQLite, and show the normalized field. Nothing else yet.
+Phase 1 prototype: fetch every configured source for an IP, keep the raw
+responses, and show the parsed result per source.
 """
 
 from __future__ import annotations
 
 import argparse
-import sqlite3
-import sys
-import urllib.error
-import urllib.request
-from datetime import datetime, timezone
+import json
 
-import ripe
+import sources
+import store
 
-SOURCE = "ripestat.network-info"
-URL = "https://stat.ripe.net/data/network-info/data.json?resource={ip}"
-TIMEOUT = 15
-USER_AGENT = "aranya/0.0"
 DEFAULT_DB = "aranya.db"
 
 
-def fetch(url: str, timeout: int = TIMEOUT) -> tuple[int | None, str | None, str | None]:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+def run_adapter(conn, adapter: dict, ip: str, context: dict) -> tuple[str, object]:
+    url = adapter["url"](context)
+    status, body, error = sources.http_get(url)
+    store.save_fetch(conn, adapter["id"], url, status, body, error)
+
+    if error:
+        return f"error ({error})", None
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", "replace"), None
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace")
-        return exc.code, body, f"HTTP {exc.code}"
-    except Exception as exc:
-        return None, None, str(exc)
+        parsed = adapter["parse"](body)
+    except ValueError as exc:
+        return f"parse error ({exc})", None
+
+    for key, value in adapter["provides"](parsed).items():
+        if value is not None:
+            context[key] = value
+
+    return "ok", parsed
 
 
-def open_store(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS fetches (
-            id INTEGER PRIMARY KEY,
-            source TEXT NOT NULL,
-            url TEXT NOT NULL,
-            status INTEGER,
-            body TEXT,
-            error TEXT,
-            fetched_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    return conn
+def run_all(conn, ip: str) -> dict:
+    context: dict = {"ip": ip}
+    remaining = list(sources.SOURCES)
+    statuses: dict[str, str] = {}
+    parsed_results: dict[str, object] = {}
 
+    progressed = True
+    while remaining and progressed:
+        progressed = False
+        for adapter in list(remaining):
+            if not all(key in context for key in adapter["needs"]):
+                continue
+            remaining.remove(adapter)
+            progressed = True
+            status, parsed = run_adapter(conn, adapter, ip, context)
+            statuses[adapter["id"]] = status
+            parsed_results[adapter["id"]] = parsed
 
-def save_fetch(
-    conn: sqlite3.Connection,
-    source: str,
-    url: str,
-    status: int | None,
-    body: str | None,
-    error: str | None,
-) -> None:
-    conn.execute(
-        "INSERT INTO fetches (source, url, status, body, error, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (source, url, status, body, error, datetime.now(timezone.utc).isoformat()),
-    )
-    conn.commit()
+    for adapter in remaining:
+        statuses[adapter["id"]] = f"skipped (missing {', '.join(adapter['needs'])})"
+
+    return statuses, parsed_results
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="aranya phase 0 prototype")
+    parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", help="IP address to look up")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
     args = parser.parse_args(argv)
 
-    url = URL.format(ip=args.ip)
-    conn = open_store(args.db)
-    status, body, error = fetch(url)
-    save_fetch(conn, SOURCE, url, status, body, error)
+    conn = store.open_store(args.db)
+    statuses, parsed = run_all(conn, args.ip)
     conn.close()
 
-    if error:
-        print(f"{SOURCE}: error: {error}", file=sys.stderr)
-        return 1
+    print(f"aranya {args.ip}\n")
+    print("sources:")
+    for adapter in sources.SOURCES:
+        print(f"  {statuses[adapter['id']]:<12} {adapter['id']}")
 
-    try:
-        result = ripe.network_info(body)
-    except ValueError as exc:
-        print(f"{SOURCE}: parse error: {exc}", file=sys.stderr)
-        return 1
+    print("\nparsed:")
+    for adapter in sources.SOURCES:
+        if parsed.get(adapter["id"]) is not None:
+            print(f"  {adapter['id']}: {json.dumps(parsed[adapter['id']], ensure_ascii=False)}")
 
-    print(f"{args.ip} -> prefix={result['prefix']} asns={result['asns']}")
     return 0
 
 
