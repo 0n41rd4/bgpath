@@ -60,6 +60,25 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertTrue(r["certificates"])
         self.assertEqual(r["certificates"][0]["common_name"], "dns.google")
 
+    def test_ipinfo(self):
+        r = parsers.ipinfo(load("ipinfo.json"))
+        self.assertEqual(r["org"], "AS15169 Google LLC")
+        self.assertEqual(r["hostname"], "dns.google")
+        self.assertEqual(r["latitude"], 37.4056)
+        self.assertEqual(r["asn"], "AS15169")
+
+    def test_shodan(self):
+        r = parsers.shodan(load("shodan.json"))
+        self.assertEqual(r["hostnames"], ["dns.google"])
+        self.assertIn(53, r["ports"])
+        self.assertEqual(r["country"], "United States")
+
+    def test_mmdb(self):
+        r = parsers.mmdb(load("mmdb.json"))
+        self.assertEqual(r["country"], "US")
+        self.assertEqual(r["city"], "Mountain View")
+        self.assertEqual(r["latitude"], 37.4056)
+
 
 class ToleranceTest(unittest.TestCase):
     def test_non_dict(self):

@@ -1,15 +1,20 @@
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aranya
+import sources
 import store
 
 RIPE = Path(__file__).parent / "fixtures" / "ripe"
 OTHERS = Path(__file__).parent / "fixtures" / "others"
+
+OPTIONAL = {"ipinfo", "shodan.host", "maxmind.geolite2", "dbip.lite"}
 
 
 def make_fetch():
@@ -32,6 +37,10 @@ def make_fetch():
             body = "dns.google"
         elif "internetdb" in url:
             body = (OTHERS / "internetdb.json").read_text()
+        elif "ipinfo.io" in url:
+            body = (OTHERS / "ipinfo.json").read_text()
+        elif "api.shodan.io" in url:
+            body = (OTHERS / "shodan.json").read_text()
         elif "globalping" in url:
             body = (OTHERS / "globalping.json").read_text()
         elif "netfac" in url:
@@ -57,11 +66,40 @@ class PipelineTest(unittest.TestCase):
             conn.close()
 
         for source_id, status in statuses.items():
-            self.assertEqual(status, "ok", f"{source_id}: {status}")
+            if source_id in OPTIONAL:
+                self.assertTrue(status.startswith("skipped"), f"{source_id}: {status}")
+            else:
+                self.assertEqual(status, "ok", f"{source_id}: {status}")
 
         self.assertEqual(parsed["ripestat.network-info"]["asns"], ["15169"])
         self.assertEqual(parsed["peeringdb.net"]["net_id"], 433)
         self.assertEqual(parsed["rdns.ptr"]["hostname"], "dns.google")
+
+    def test_optional_sources_configured(self):
+        env = {"IPINFO_TOKEN": "test-token", "SHODAN_API_KEY": "test-key"}
+        with mock.patch.dict(os.environ, env):
+            with tempfile.TemporaryDirectory() as tmp:
+                conn = store.open_store(str(Path(tmp) / "t.db"))
+                statuses, _ = aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
+                urls = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT url FROM fetches WHERE source IN ('ipinfo', 'shodan.host')"
+                    )
+                ]
+                conn.close()
+
+        self.assertEqual(statuses["ipinfo"], "ok")
+        self.assertEqual(statuses["shodan.host"], "ok")
+        for url in urls:
+            self.assertNotIn("test-token", url)
+            self.assertNotIn("test-key", url)
+
+    def test_redact_url(self):
+        redacted = sources.redact_url("https://ipinfo.io/8.8.8.8/json?token=sekrit&other=1")
+        self.assertNotIn("sekrit", redacted)
+        self.assertIn("other=1", redacted)
+        self.assertEqual(sources.redact_url("PTR 8.8.8.8"), "PTR 8.8.8.8")
 
     def test_observations_written_offline(self):
         with tempfile.TemporaryDirectory() as tmp:

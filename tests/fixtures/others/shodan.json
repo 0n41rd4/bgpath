@@ -1,0 +1,17 @@
+{
+  "ip": 134744072,
+  "ip_str": "8.8.8.8",
+  "ports": [53, 443],
+  "hostnames": ["dns.google"],
+  "org": "Google LLC",
+  "isp": "Google LLC",
+  "os": null,
+  "country_name": "United States",
+  "country_code": "US",
+  "city": "Mountain View",
+  "region_code": "CA",
+  "latitude": 37.4056,
+  "longitude": -122.0775,
+  "asn": "AS15169",
+  "data": []
+}

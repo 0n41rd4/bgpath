@@ -25,6 +25,11 @@ def run_adapter(
     context: dict,
     fetch=None,
 ) -> tuple[str, object]:
+    if "precheck" in adapter:
+        reason = adapter["precheck"]()
+        if reason:
+            return f"skipped ({reason})", None
+
     url = adapter["url"](context)
     if adapter.get("delay") and fetch is None:
         time.sleep(adapter["delay"])
@@ -34,7 +39,7 @@ def run_adapter(
         status, body, error = adapter["fetch"](ip, context)
     else:
         status, body, error = sources.http_get(url)
-    fetch_id = store.save_fetch(conn, adapter["id"], url, status, body, error)
+    fetch_id = store.save_fetch(conn, adapter["id"], sources.redact_url(url), status, body, error)
 
     if error:
         return f"error ({error})", None

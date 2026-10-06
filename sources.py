@@ -9,6 +9,7 @@ result into normalized observations (topic/key/value) with provenance.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import time
 import urllib.error
@@ -89,6 +90,51 @@ def _fetch_globalping(ip: str, ctx: dict) -> tuple[int | None, str | None, str |
 
 def _reverse(ip: str) -> str:
     return ".".join(reversed(ip.split(".")))
+
+
+def _env(name: str) -> str | None:
+    return os.environ.get(name) or None
+
+
+def _mmdb_precheck(env_name: str) -> str | None:
+    path = _env(env_name)
+    if not path:
+        return f"{env_name} not set"
+    if not os.path.isfile(path):
+        return f"{env_name} file not found"
+    try:
+        import maxminddb  # noqa: F401
+    except ImportError:
+        return "maxminddb not installed (pip install maxminddb)"
+    return None
+
+
+def _make_mmdb_fetch(env_name: str):
+    def fetch(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:
+        try:
+            import maxminddb
+            with maxminddb.open_database(_env(env_name)) as reader:
+                record = reader.get(ip)
+        except Exception as exc:
+            return None, None, str(exc)
+        if record is None:
+            return None, None, "not in database"
+        return 200, json.dumps(record), None
+
+    return fetch
+
+
+def redact_url(url: str) -> str:
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    parts = urlparse(url)
+    if parts.scheme not in ("http", "https") or not parts.query:
+        return url
+    query = [
+        (key, "***" if key.lower() in ("token", "key", "api_key") else value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+    ]
+    return urlunparse(parts._replace(query=urlencode(query)))
 
 
 def _first_asn(parsed: dict) -> object:
@@ -189,6 +235,47 @@ def _peeringdb_netixlan_obs(ip: str, parsed: dict) -> list[dict]:
 
 def _crtsh_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("names", "certificate", cert) for cert in parsed["certificates"]]
+
+
+def _ipinfo_obs(ip: str, parsed: dict) -> list[dict]:
+    obs = [
+        _obs("location", "claim", {
+            "city": parsed["city"],
+            "country": parsed["country"],
+            "latitude": parsed["latitude"],
+            "longitude": parsed["longitude"],
+        }),
+        _obs("ownership", "org", parsed["org"]),
+        _obs("ownership", "asn", parsed["asn"]),
+        _obs("identity", "hostname", parsed["hostname"]),
+    ]
+    return obs
+
+
+def _shodan_obs(ip: str, parsed: dict) -> list[dict]:
+    obs = [_obs("identity", "hostname", hostname) for hostname in parsed["hostnames"]]
+    obs.append(_obs("identity", "ports", parsed["ports"]))
+    obs.append(_obs("identity", "os", parsed["os"]))
+    obs.append(_obs("ownership", "org", parsed["org"]))
+    obs.append(_obs("ownership", "asn", parsed["asn"]))
+    obs.append(_obs("location", "claim", {
+        "city": parsed["city"],
+        "country": parsed["country"],
+        "latitude": parsed["latitude"],
+        "longitude": parsed["longitude"],
+    }))
+    return obs
+
+
+def _mmdb_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("location", "claim", {
+            "city": parsed["city"],
+            "country": parsed["country"],
+            "latitude": parsed["latitude"],
+            "longitude": parsed["longitude"],
+        })
+    ]
 
 
 SOURCES: list[dict] = [
@@ -338,6 +425,52 @@ SOURCES: list[dict] = [
         "url": lambda ctx: f"https://crt.sh/?q={ctx['hostname']}&output=json",
         "parse": parsers.crtsh,
         "observations": _crtsh_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "ipinfo",
+        "upstream": "IPinfo (ProbeNet + registry)",
+        "evidence_class": "reported",
+        "needs": [],
+        "precheck": lambda: None if _env("IPINFO_TOKEN") else "IPINFO_TOKEN not set",
+        "url": lambda ctx: f"https://ipinfo.io/{ctx['ip']}/json?token={_env('IPINFO_TOKEN')}",
+        "parse": parsers.ipinfo,
+        "observations": _ipinfo_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "shodan.host",
+        "upstream": "Shodan",
+        "evidence_class": "observed-passive",
+        "needs": [],
+        "precheck": lambda: None if _env("SHODAN_API_KEY") else "SHODAN_API_KEY not set",
+        "url": lambda ctx: f"https://api.shodan.io/shodan/host/{ctx['ip']}?key={_env('SHODAN_API_KEY')}",
+        "parse": parsers.shodan,
+        "observations": _shodan_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "maxmind.geolite2",
+        "upstream": "MaxMind",
+        "evidence_class": "reported",
+        "needs": [],
+        "precheck": lambda: _mmdb_precheck("MAXMIND_DB"),
+        "url": lambda ctx: f"MAXMIND_DB {ctx['ip']}",
+        "fetch": _make_mmdb_fetch("MAXMIND_DB"),
+        "parse": parsers.mmdb,
+        "observations": _mmdb_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "dbip.lite",
+        "upstream": "DB-IP",
+        "evidence_class": "reported",
+        "needs": [],
+        "precheck": lambda: _mmdb_precheck("DBIP_DB"),
+        "url": lambda ctx: f"DBIP_DB {ctx['ip']}",
+        "fetch": _make_mmdb_fetch("DBIP_DB"),
+        "parse": parsers.mmdb,
+        "observations": _mmdb_obs,
         "provides": lambda parsed: {},
     },
 ]

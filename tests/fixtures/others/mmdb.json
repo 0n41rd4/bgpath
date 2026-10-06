@@ -1,0 +1,7 @@
+{
+  "country": {"iso_code": "US", "names": {"en": "United States"}},
+  "city": {"names": {"en": "Mountain View"}},
+  "location": {"latitude": 37.4056, "longitude": -122.0775},
+  "postal": {"code": "94043"},
+  "subdivisions": [{"iso_code": "CA", "names": {"en": "California"}}]
+}

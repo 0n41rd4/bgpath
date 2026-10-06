@@ -142,3 +142,57 @@ def crtsh(body: str) -> dict:
         if isinstance(item, dict)
     ]
     return {"certificates": certificates}
+
+
+def ipinfo(body: str) -> dict:
+    payload = _obj(body)
+    loc = (payload.get("loc") or "").split(",")
+    asn = payload.get("asn") or {}
+    return {
+        "org": payload.get("org"),
+        "hostname": payload.get("hostname"),
+        "city": payload.get("city"),
+        "region": payload.get("region"),
+        "country": payload.get("country"),
+        "latitude": _float(loc[0]) if len(loc) == 2 else None,
+        "longitude": _float(loc[1]) if len(loc) == 2 else None,
+        "asn": asn.get("asn") if isinstance(asn, dict) else None,
+    }
+
+
+def shodan(body: str) -> dict:
+    payload = _obj(body)
+    return {
+        "org": payload.get("org"),
+        "asn": payload.get("asn"),
+        "hostnames": payload.get("hostnames") or [],
+        "ports": payload.get("ports") or [],
+        "os": payload.get("os"),
+        "city": payload.get("city"),
+        "country": payload.get("country_name"),
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+    }
+
+
+def mmdb(body: str) -> dict:
+    payload = _obj(body)
+    country = payload.get("country") or {}
+    city = payload.get("city") or {}
+    location = payload.get("location") or {}
+    subdivisions = payload.get("subdivisions") or []
+    subdivision = subdivisions[0] if isinstance(subdivisions, list) and subdivisions else {}
+    return {
+        "country": country.get("iso_code"),
+        "city": (city.get("names") or {}).get("en"),
+        "latitude": location.get("latitude"),
+        "longitude": location.get("longitude"),
+        "subdivision": subdivision.get("iso_code"),
+    }
+
+
+def _float(text: str) -> float | None:
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
