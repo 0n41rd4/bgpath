@@ -11,6 +11,7 @@ import argparse
 import json
 import time
 
+import compare
 import normalize
 import sources
 import store
@@ -95,10 +96,14 @@ def run_all(conn, ip: str, fetch=None) -> dict:
     return statuses, parsed_results
 
 
-def _fmt(value: object) -> str:
+def _fmt(value: object, limit: int = 100) -> str:
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
+        text = json.dumps(value, ensure_ascii=False)
+    else:
+        text = str(value)
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
 
 
 def print_summary(conn, ip: str) -> None:
@@ -120,6 +125,16 @@ def print_summary(conn, ip: str) -> None:
         print(f"    {source:<22} {city} | {country} | {latitude} | {longitude}")
 
 
+def print_comparison(conn, ip: str) -> None:
+    marks = {"agree": "=", "disagree": "!", "spread": "~"}
+    print("\ncomparison:")
+    for row in compare.summarize(conn, ip):
+        mark = marks[row["verdict"]]
+        print(f"  [{mark}] {row['topic']}.{row['key']}  ({row['verdict']})")
+        for value, sources in row["values"].items():
+            print(f"       {_fmt(json.loads(value))}  <-  {', '.join(sources)}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", help="IP address to look up")
@@ -135,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {statuses[adapter['id']]:<12} {adapter['id']}")
 
     print_summary(conn, args.ip)
+    print_comparison(conn, args.ip)
     conn.close()
     return 0
 
