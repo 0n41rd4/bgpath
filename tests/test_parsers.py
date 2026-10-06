@@ -64,8 +64,9 @@ class NonRipeParserTest(unittest.TestCase):
         r = parsers.ipinfo(load("ipinfo.json"))
         self.assertEqual(r["org"], "AS15169 Google LLC")
         self.assertEqual(r["hostname"], "dns.google")
-        self.assertEqual(r["latitude"], 37.4056)
-        self.assertEqual(r["asn"], "AS15169")
+        self.assertEqual(r["latitude"], 38.0088)
+        self.assertEqual(r["asn"], "15169")
+        self.assertIs(r["anycast"], True)
 
     def test_shodan(self):
         r = parsers.shodan(load("shodan.json"))

@@ -8,6 +8,7 @@ payloads degrade to empty results rather than crashing.
 from __future__ import annotations
 
 import json
+import re
 
 
 def _obj(body: str) -> dict:
@@ -147,7 +148,8 @@ def crtsh(body: str) -> dict:
 def ipinfo(body: str) -> dict:
     payload = _obj(body)
     loc = (payload.get("loc") or "").split(",")
-    asn = payload.get("asn") or {}
+    asn = payload.get("asn")
+    asn_value = asn.get("asn") if isinstance(asn, dict) else None
     return {
         "org": payload.get("org"),
         "hostname": payload.get("hostname"),
@@ -156,7 +158,8 @@ def ipinfo(body: str) -> dict:
         "country": payload.get("country"),
         "latitude": _float(loc[0]) if len(loc) == 2 else None,
         "longitude": _float(loc[1]) if len(loc) == 2 else None,
-        "asn": asn.get("asn") if isinstance(asn, dict) else None,
+        "asn": _asn_digits(asn_value) or _asn_digits(payload.get("org")),
+        "anycast": payload.get("anycast"),
     }
 
 
@@ -196,3 +199,8 @@ def _float(text: str) -> float | None:
         return float(text)
     except (TypeError, ValueError):
         return None
+
+
+def _asn_digits(text) -> str | None:
+    match = re.search(r"(\d+)", text or "")
+    return match.group(1) if match else None

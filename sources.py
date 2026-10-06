@@ -158,7 +158,12 @@ def _network_info_obs(ip: str, parsed: dict) -> list[dict]:
 
 
 def _geoloc_obs(ip: str, parsed: dict) -> list[dict]:
-    return [_obs("location", "claim", loc) for loc in parsed["locations"]]
+    obs = []
+    for loc in parsed["locations"]:
+        if loc.get("country") == "?":
+            continue
+        obs.append(_obs("location", "claim", loc))
+    return obs
 
 
 def _as_overview_obs(ip: str, parsed: dict) -> list[dict]:
@@ -249,6 +254,8 @@ def _ipinfo_obs(ip: str, parsed: dict) -> list[dict]:
         _obs("ownership", "asn", parsed["asn"]),
         _obs("identity", "hostname", parsed["hostname"]),
     ]
+    if parsed.get("anycast") is not None:
+        obs.append(_obs("routing", "anycast", parsed["anycast"]))
     return obs
 
 
