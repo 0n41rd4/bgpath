@@ -1,0 +1,35 @@
+[
+ {
+  "issuer_ca_id": 286237,
+  "issuer_name": "C=US, O=Google Trust Services, CN=WE2",
+  "common_name": "dns.google",
+  "name_value": "dns64.dns.google\ndns.google\n*.dns.google.com",
+  "id": 24874210360,
+  "not_before": "2026-03-09T08:38:35",
+  "not_after": "2026-06-01T08:38:34",
+  "serial_number": "2f6aebd5d90d8ab60929a5baf93e9212",
+  "result_count": 4
+ },
+ {
+  "issuer_ca_id": 286237,
+  "issuer_name": "C=US, O=Google Trust Services, CN=WE2",
+  "common_name": "dns.google",
+  "name_value": "dns64.dns.google\ndns.google\n*.dns.google.com\ndns.google.com",
+  "id": 24874210273,
+  "not_before": "2026-03-09T08:38:34",
+  "not_after": "2026-06-01T08:38:33",
+  "serial_number": "00daad437528e1b99d123e88970179bda8",
+  "result_count": 5
+ },
+ {
+  "issuer_ca_id": 286237,
+  "issuer_name": "C=US, O=Google Trust Services, CN=WE2",
+  "common_name": "dns.google",
+  "name_value": "dns64.dns.google\ndns.google\n*.dns.google.com\ndns.google.com",
+  "id": 24745025992,
+  "not_before": "2026-03-02T20:02:03",
+  "not_after": "2026-05-25T20:02:02",
+  "serial_number": "00b9febec6496e77c30972f3a351c053af",
+  "result_count": 5
+ }
+]

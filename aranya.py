@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 
 import sources
 import store
@@ -18,7 +19,12 @@ DEFAULT_DB = "aranya.db"
 
 def run_adapter(conn, adapter: dict, ip: str, context: dict) -> tuple[str, object]:
     url = adapter["url"](context)
-    status, body, error = sources.http_get(url)
+    if adapter.get("delay"):
+        time.sleep(adapter["delay"])
+    if "fetch" in adapter:
+        status, body, error = adapter["fetch"](ip, context)
+    else:
+        status, body, error = sources.http_get(url)
     store.save_fetch(conn, adapter["id"], url, status, body, error)
 
     if error:
