@@ -217,6 +217,34 @@ def _internetdb_obs(ip: str, parsed: dict) -> list[dict]:
     return obs
 
 
+def _ipwhois_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("ownership", "asn", parsed["asn"]),
+        _obs("ownership", "org", parsed["org"]),
+        _obs("location", "claim", {
+            "city": parsed["city"],
+            "country": parsed["country"],
+            "latitude": parsed["latitude"],
+            "longitude": parsed["longitude"],
+        }),
+    ]
+
+
+def _ipguide_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("ownership", "prefix", parsed["prefix"]),
+        _obs("ownership", "asn", parsed["asn"]),
+        _obs("ownership", "name", parsed["name"]),
+        _obs("country", "country", parsed["country"]),
+        _obs("location", "claim", {
+            "city": parsed["city"],
+            "country": parsed["country"],
+            "latitude": parsed["latitude"],
+            "longitude": parsed["longitude"],
+        }),
+    ]
+
+
 def _globalping_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("latency", "probe", result) for result in parsed["results"]]
 
@@ -365,6 +393,26 @@ SOURCES: list[dict] = [
         "url": lambda ctx: f"https://rdap.org/ip/{ctx['ip']}",
         "parse": parsers.rdap,
         "observations": _rdap_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "ipwho.is",
+        "upstream": "ipwho.is",
+        "evidence_class": "reported",
+        "needs": [],
+        "url": lambda ctx: f"https://ipwho.is/{ctx['ip']}",
+        "parse": parsers.ipwhois,
+        "observations": _ipwhois_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "ip.guide",
+        "upstream": "ip.guide",
+        "evidence_class": "reported",
+        "needs": [],
+        "url": lambda ctx: f"https://ip.guide/{ctx['ip']}",
+        "parse": parsers.ipguide,
+        "observations": _ipguide_obs,
         "provides": lambda parsed: {},
     },
     {

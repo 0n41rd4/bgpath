@@ -203,6 +203,37 @@ def mmdb_asn(body: str) -> dict:
     }
 
 
+def ipwhois(body: str) -> dict:
+    payload = _obj(body)
+    connection = payload.get("connection") or {}
+    number = connection.get("asn")
+    return {
+        "asn": str(number) if number is not None else None,
+        "org": connection.get("org"),
+        "city": payload.get("city"),
+        "country": payload.get("country_code"),
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+    }
+
+
+def ipguide(body: str) -> dict:
+    payload = _obj(body)
+    network = payload.get("network") or {}
+    system = network.get("autonomous_system") or {}
+    location = payload.get("location") or {}
+    number = system.get("asn")
+    return {
+        "prefix": network.get("cidr"),
+        "asn": str(number) if number is not None else None,
+        "name": system.get("organization") or system.get("name"),
+        "country": system.get("country"),
+        "city": location.get("city"),
+        "latitude": location.get("latitude"),
+        "longitude": location.get("longitude"),
+    }
+
+
 def _float(text: str) -> float | None:
     try:
         return float(text)

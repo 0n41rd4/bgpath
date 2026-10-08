@@ -1,0 +1,24 @@
+{
+  "ip": "8.8.8.8",
+  "network": {
+    "cidr": "8.8.8.0/24",
+    "hosts": {
+      "start": "8.8.8.1",
+      "end": "8.8.8.254"
+    },
+    "autonomous_system": {
+      "asn": 15169,
+      "name": "GOOGLE - Google LLC",
+      "organization": "Google LLC",
+      "country": "US",
+      "rir": "ARIN"
+    }
+  },
+  "location": {
+    "city": null,
+    "country": "United States",
+    "timezone": "America/Chicago",
+    "latitude": 37.751,
+    "longitude": -97.822
+  }
+}

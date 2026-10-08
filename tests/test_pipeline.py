@@ -33,6 +33,10 @@ def make_fetch():
             body = (OTHERS / "cymru.json").read_text()
         elif "rdap" in url:
             body = (OTHERS / "rdap.json").read_text()
+        elif "ipwho.is" in url:
+            body = (OTHERS / "ipwhois.json").read_text()
+        elif "ip.guide" in url:
+            body = (OTHERS / "ipguide.json").read_text()
         elif url.startswith("PTR "):
             body = "dns.google"
         elif "internetdb" in url:

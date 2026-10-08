@@ -85,6 +85,20 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertEqual(r["asn"], "15169")
         self.assertEqual(r["org"], "Google LLC")
 
+    def test_ipwhois(self):
+        r = parsers.ipwhois(load("ipwhois.json"))
+        self.assertEqual(r["asn"], "15169")
+        self.assertEqual(r["org"], "Google LLC")
+        self.assertEqual(r["country"], "US")
+        self.assertEqual(r["city"], "San Jose")
+
+    def test_ipguide(self):
+        r = parsers.ipguide(load("ipguide.json"))
+        self.assertEqual(r["asn"], "15169")
+        self.assertEqual(r["prefix"], "8.8.8.0/24")
+        self.assertEqual(r["name"], "Google LLC")
+        self.assertEqual(r["country"], "US")
+
 
 class ToleranceTest(unittest.TestCase):
     def test_non_dict(self):
