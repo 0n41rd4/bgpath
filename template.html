@@ -7,7 +7,7 @@
 <style>
   :root {
     --agree:#2e7d32; --single:#8a8a8a; --spread:#e08a00; --disagree:#c62828;
-    --no_data:#b5b5b5; --error:#d81b60; --skipped:#6f6f6f; --absent:#dcdcdc;
+    --no_data:#b5b5b5; --error:#d81b60; --skipped:#6f6f6f; --absent:#3a424c;
     --bg:#11151c; --panel:#1b2129; --ink:#e6e9ee; --muted:#9aa4b2; --line:#2b333d;
   }
   * { box-sizing: border-box; }
@@ -26,27 +26,38 @@
   nav button.active { color:var(--ink); border-color:#3d7bd6; }
   main { padding:14px 18px 60px; }
   section { display:none; } section.active { display:block; }
-  .legend { color:var(--muted); margin:6px 0 14px; }
+  .legend { color:var(--muted); margin:8px 0 14px; }
+  .legend .item { margin-right:14px; white-space:nowrap; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px;
+            vertical-align:middle; }
   .chip { display:inline-block; padding:0 6px; border-radius:3px; color:#0c0f14; font-weight:700; }
+  .val { font-weight:700; }
   .card { border:1px solid var(--line); border-radius:6px; margin:0 0 10px; background:var(--panel); }
   .card > summary { cursor:pointer; padding:8px 10px; display:flex; gap:10px; align-items:baseline; }
-  .card > summary .name { font-weight:700; }
-  .card .body { padding:0 10px 10px; border-top:1px solid var(--line); }
-  table { border-collapse:collapse; }
-  .grid td, .grid th { width:18px; height:18px; text-align:center; font-size:12px; padding:0; }
-  .grid th { color:var(--muted); font-weight:400; }
-  .grid th.rowhead { text-align:right; padding-right:8px; width:auto; white-space:nowrap; }
-  .grid td.cell { border:1px solid var(--line); cursor:pointer; }
-  .mono { white-space:pre-wrap; word-break:break-word; }
+  .card > summary .name { font-weight:700; min-width:20ch; }
+  .card > summary .cons { flex:1; }
+  .card .body { padding:8px 10px 12px; border-top:1px solid var(--line); }
+  .labelrow { padding:3px 8px; border-left:3px solid transparent; border-radius:3px; }
+  .labelrow.top { border-left-color:var(--agree); background:rgba(46,125,50,.12); }
+  table.matrix { border-collapse:separate; border-spacing:0; font-size:12px; }
+  table.matrix th, table.matrix td { padding:2px 6px; border-bottom:1px solid var(--line); }
+  table.matrix th { color:var(--muted); font-weight:400; text-align:left; position:sticky; top:0;
+                    background:var(--bg); z-index:2; }
+  table.matrix th.claimcol, table.matrix td.claimcol { position:sticky; left:0; background:var(--panel);
+                    z-index:3; white-space:nowrap; padding-right:10px; }
+  table.matrix th.claimcol { z-index:4; }
+  td.cell { border-left:3px solid transparent; max-width:160px; overflow:hidden;
+            text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  td.gap { color:#4a525c; text-align:center; }
+  .wrap { overflow:auto; max-height:75vh; border:1px solid var(--line); border-radius:6px; }
   .muted { color:var(--muted); }
-  .bar { height:10px; border-radius:2px; }
-  .bars { display:grid; grid-template-columns: max-content 1fr; gap:4px 10px; align-items:center; }
+  code { background:#0c0f14; padding:1px 5px; border-radius:3px; }
   .detail { margin:10px 0 24px; padding:10px; border:1px solid var(--line); border-radius:6px;
             background:var(--bg); }
-  code { background:#0c0f14; padding:1px 5px; border-radius:3px; }
-  .geo { background:var(--panel); border:1px solid var(--line); border-radius:6px; }
-  .kv { margin:2px 0; }
-  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; }
+  .geo { background:#0d1b2a; border:1px solid var(--line); border-radius:6px; }
+  .bars { display:grid; grid-template-columns: max-content 1fr; gap:4px 10px; align-items:center; }
+  .bar-track { position:relative; height:11px; background:#0c0f14; border-radius:2px; }
+  .bar { position:absolute; top:0; left:0; height:11px; border-radius:2px; }
 </style>
 </head>
 <body>
@@ -58,29 +69,23 @@
     <label for="f-state">state</label>
     <select id="f-state">
       <option value="">all</option>
-      <option value="agree">agree</option>
-      <option value="single">single</option>
-      <option value="spread">spread</option>
-      <option value="disagree">disagree</option>
-      <option value="dissent">dissent</option>
-      <option value="multi">multi</option>
-      <option value="no_data">no_data</option>
-      <option value="error">error</option>
-      <option value="skipped">skipped</option>
-      <option value="absent">absent</option>
+      <option value="agree">agree</option><option value="single">single</option>
+      <option value="spread">spread</option><option value="disagree">disagree</option>
+      <option value="dissent">dissent</option><option value="multi">multi</option>
+      <option value="no_data">no_data</option><option value="error">error</option>
+      <option value="skipped">skipped</option><option value="absent">absent</option>
     </select>
     <span class="muted" id="count"></span>
   </div>
   <nav>
     <button data-tab="claims" class="active">claims</button>
-    <button data-tab="heatmap">source heatmap</button>
+    <button data-tab="heatmap">source values</button>
     <button data-tab="overview">overview</button>
     <button data-tab="profile">agreement profile</button>
     <button data-tab="geo">geo</button>
   </nav>
 </header>
 <main>
-  <div class="legend" id="legend"></div>
   <div id="detail" class="detail" hidden></div>
   <section id="tab-claims" class="active"></section>
   <section id="tab-heatmap"></section>
@@ -92,11 +97,18 @@
 <script>
 "use strict";
 const DATA = JSON.parse(document.getElementById("aranya-data").textContent || "null");
-const COLORS = {agree:"#2e7d32",single:"#8a8a8a",spread:"#e08a00",disagree:"#c62828",
-  dissent:"#c62828",multi:"#e08a00",no_data:"#b5b5b5",error:"#d81b60",skipped:"#6f6f6f",absent:"#dcdcdc"};
+const LAND = /*__ARANYA_LAND__*/null;
+const COLOR = {agree:"#2e7d32",single:"#8a8a8a",spread:"#e08a00",disagree:"#c62828",
+  dissent:"#c62828",multi:"#e08a00",no_data:"#b5b5b5",error:"#d81b60",skipped:"#6f6f6f",absent:"#3a424c"};
+const TINT = {agree:"rgba(46,125,50,.30)",single:"rgba(138,138,138,.22)",spread:"rgba(224,138,0,.30)",
+  disagree:"rgba(198,40,40,.30)",dissent:"rgba(198,40,40,.30)",multi:"rgba(224,138,0,.30)",
+  no_data:"rgba(181,181,181,.12)",error:"rgba(216,27,96,.32)",skipped:"rgba(111,111,111,.25)",
+  absent:"transparent"};
 const GLYPH = {agree:"·",single:"o",spread:"+",disagree:"#",dissent:"x",multi:"~",
-  no_data:"-",error:"!",skipped:"/",absent:" "};
-const STATE_LIST = ["agree","single","spread","disagree","dissent","multi","no_data","error","skipped","absent"];
+  no_data:"-",error:"!",skipped:"/",absent:""};
+const VERDICTS = ["agree","single","spread","disagree"];
+const SOURCE_STATES = ["agree","dissent","multi","single","no_data","error","skipped","absent"];
+const MISSING = {no_data:1, error:1, skipped:1, absent:1};
 
 function el(tag, cls, text){
   const node = document.createElement(tag);
@@ -106,8 +118,18 @@ function el(tag, cls, text){
 }
 function chip(state, text){
   const c = el("span","chip", text || state);
-  c.style.background = COLORS[state] || "#888";
+  c.style.background = COLOR[state] || "#888";
   return c;
+}
+function legend(states){
+  const box = el("p","legend");
+  for (const st of states){
+    const item = el("span","item");
+    const sw = el("span","swatch"); sw.style.background = COLOR[st];
+    item.append(sw, document.createTextNode(st));
+    box.append(item);
+  }
+  return box;
 }
 const claimKey = c => c.topic + "." + c.key;
 const stateIndex = {};
@@ -115,12 +137,11 @@ for (const s of (DATA.states||[])) stateIndex[s.ip+"|"+s.topic+"."+s.key+"|"+s.s
 
 function currentFilters(){
   const p = new URLSearchParams(location.hash.replace(/^#/,""));
-  return {ip:p.get("ip")||"", q:p.get("q")||"", state:p.get("state")||"",
-          tab:p.get("tab")||"claims"};
+  return {ip:p.get("ip")||"", q:p.get("q")||"", state:p.get("state")||"", tab:p.get("tab")||"claims"};
 }
 function writeFilters(f){
   const p = new URLSearchParams();
-  for (const k of ["ip","q","state","tab"]) if (f[k]) p.set(k,f[k]);
+  for (const k of ["ip","q","state","tab"]) if (f[k]) p.set(k, f[k]);
   location.hash = p.toString();
 }
 function selectedIP(){
@@ -129,9 +150,8 @@ function selectedIP(){
 }
 function claimMatches(c, f){
   if (f.state){
-    if (["agree","single","spread","disagree"].includes(f.state)){
-      if (c.verdict !== f.state) return false;
-    } else if (["dissent","multi","no_data","error","skipped","absent"].includes(f.state)){
+    if (VERDICTS.includes(f.state)){ if (c.verdict !== f.state) return false; }
+    else if (SOURCE_STATES.includes(f.state)){
       const any = (DATA.states||[]).some(s => s.ip===c.ip && s.topic===c.topic && s.key===c.key && s.state===f.state);
       if (!any) return false;
     }
@@ -143,22 +163,26 @@ function claimMatches(c, f){
   }
   return true;
 }
-function sourceInFilters(name, f){
-  return !f.q || name.toLowerCase().includes(f.q.toLowerCase());
+function srcFilter(name, f){ return !f.q || name.toLowerCase().includes(f.q.toLowerCase()); }
+function claimList(ip, f){ return DATA.claims.filter(c => c.ip===ip && claimMatches(c,f)); }
+function sourceValue(claim, source){
+  const labs = (claim.source_labels||{})[source];
+  return labs && labs.length ? labs[0] : "";
 }
-function claimList(ip, f){
-  return DATA.claims.filter(c => c.ip===ip && claimMatches(c,f));
+function cellText(claim, source, state){
+  if (state==="multi") return "~" + (claim.counts[source]||0);
+  if (state==="agree"||state==="single"||state==="dissent") return sourceValue(claim, source);
+  return GLYPH[state];
 }
 
 function showDetail(claim, source){
   const box = document.getElementById("detail");
-  box.hidden = false;
-  box.replaceChildren();
+  box.hidden = false; box.replaceChildren();
   box.append(el("div","", claimKey(claim)+"  ["+claim.verdict+"]  consensus: "+claim.consensus));
   box.append(el("div","muted", claim.n_sources+" source(s), "+claim.n_upstreams+" upstream(s); verdict computed over upstreams"));
   for (const lab of claim.labels){
-    const row = el("div","kv");
-    row.append(el("span","", "• "+lab.label+"  "));
+    const row = el("div","");
+    row.append(el("span","val", lab.label+"  "));
     row.append(el("span","muted", "["+lab.sources.join(", ")+"]  upstreams: "+lab.upstreams.join(", ")));
     box.append(row);
   }
@@ -166,14 +190,17 @@ function showDetail(claim, source){
   const obs = (DATA.observations||[]).filter(o => o.ip===claim.ip && o.topic===claim.topic && o.key===claim.key && (!source || o.source===source));
   if (obs.length){
     box.append(el("div","muted","\nobservations:"));
-    for (const o of obs) box.append(el("div","mono","  "+o.source+"  "+JSON.stringify(o.value)));
+    for (const o of obs) box.append(el("div","", "  "+o.source+"  "+JSON.stringify(o.value)));
   } else {
     box.append(el("div","muted","\n(no embedded observations — re-export with --with-observations)"));
   }
-  const fetchIds = new Set(claim.sources.map(s => (DATA.fetches.find(f=>f.ip===claim.ip&&f.source===s)||{}).id).filter(Boolean));
-  for (const id of fetchIds) box.append(el("div","mono","$ python3 aranya.py --show-fetch "+id));
-  box.append(el("button","", "close"));
-  box.lastChild.addEventListener("click", ()=>{ box.hidden=true; });
+  for (const s of claim.sources){
+    const f = (DATA.fetches||[]).find(x => x.ip===claim.ip && x.source===s);
+    if (f) box.append(el("div","", "$ python3 aranya.py --show-fetch "+f.id));
+  }
+  const close = el("button","","close");
+  close.addEventListener("click", ()=>{ box.hidden = true; });
+  box.append(close);
   box.scrollIntoView({behavior:"smooth", block:"nearest"});
 }
 
@@ -189,18 +216,21 @@ function renderClaims(f){
     const summary = el("summary");
     summary.append(el("span","name", claimKey(c)));
     summary.append(chip(c.verdict));
-    summary.append(el("span","muted", c.n_sources+" src / "+c.n_upstreams+" up"));
+    const cons = el("span","cons");
+    cons.append(el("span","val", c.consensus));
+    cons.append(el("span","muted", "   "+c.n_sources+" src / "+c.n_upstreams+" up"));
+    summary.append(cons);
     details.append(summary);
     const body = el("div","body");
-    body.append(el("div","kv", "consensus: "+c.consensus));
-    for (const lab of c.labels){
-      const row = el("div","kv");
-      row.append(el("span","", "• "+lab.label+"  "));
-      row.append(el("span","muted", lab.sources.join(", ") + (lab.upstreams.length<c.sources.length ? "  ("+lab.upstreams.length+" upstreams)" : "")));
+    c.labels.forEach((lab, i) => {
+      const row = el("div", i===0 ? "labelrow top" : "labelrow");
+      row.append(el("span","val", lab.label+"  "));
+      row.append(el("span","muted", lab.sources.join(", ")
+        + (lab.upstreams.length < lab.sources.length ? "  ("+lab.upstreams.length+" upstreams)" : "")));
       body.append(row);
-    }
+    });
     for (const s of c.multi){
-      body.append(el("div","kv","~ "+s+"*  "+(c.counts[s]||0)+" values: "+(c.source_labels[s]||[]).slice(0,3).join(", ")));
+      body.append(el("div","labelrow", "~ "+s+"*  "+(c.counts[s]||0)+" values: "+(c.source_labels[s]||[]).slice(0,4).join(", ")));
     }
     const button = el("button","", "details / provenance");
     button.addEventListener("click", ()=>showDetail(c));
@@ -215,32 +245,32 @@ function renderHeatmap(f){
   host.replaceChildren();
   const ip = selectedIP();
   const claims = claimList(ip, f);
-  const sources = DATA.sources.filter(s => sourceInFilters(s.id, f));
-  host.append(el("p","muted","rows = source, cols = claim; state per cell ("+ip+")"));
-  const table = el("table","grid");
+  const sources = DATA.sources.filter(s => srcFilter(s.id, f));
+  host.append(el("p","muted","each cell shows that source's value for the claim ("+ip+"); colour = state. scroll horizontally →"));
+  const wrap = el("div","wrap");
+  const table = el("table","matrix");
   const head = el("tr");
-  head.append(el("th",""));
-  for (const c of claims) head.append(el("th","", claimKey(c).replace(/\./g,"\u200b.")));
+  head.append(el("th","claimcol","claim — value →"));
+  for (const src of sources) head.append(el("th","", src.id));
   table.append(head);
-  for (const src of sources){
+  for (const c of claims){
     const tr = el("tr");
-    tr.append(el("th","rowhead", src.id));
-    for (const c of claims){
-      const td = el("td","cell");
+    tr.append(el("th","claimcol", claimKey(c)+"  ["+c.verdict+"]"));
+    for (const src of sources){
       const state = stateIndex[ip+"|"+claimKey(c)+"|"+src.id] || "absent";
-      td.textContent = GLYPH[state];
-      td.style.color = state==="absent" ? "#555" : "#0c0f14";
-      td.style.background = COLORS[state] || "#888";
-      td.title = src.id+" · "+claimKey(c)+" · "+state;
+      const td = el("td","cell"+(MISSING[state]?" gap":""));
+      td.textContent = cellText(c, src.id, state);
+      td.style.borderLeftColor = COLOR[state];
+      td.style.background = TINT[state];
+      if (state==="absent") td.style.color = "#4a525c";
+      td.title = src.id+" · "+claimKey(c)+" · "+state+" : "+(sourceValue(c,src.id)||GLYPH[state]);
       td.addEventListener("click", ()=>showDetail(c, src.id));
       tr.append(td);
     }
     table.append(tr);
   }
-  host.append(table);
-  const legend = el("p","legend");
-  for (const st of STATE_LIST){ const s=el("span",""); s.append(chip(st)); legend.append(s, document.createTextNode(" "+st+"  ")); }
-  host.append(legend);
+  wrap.append(table); host.append(wrap);
+  host.append(legend(SOURCE_STATES));
 }
 
 function renderOverview(f){
@@ -250,105 +280,113 @@ function renderOverview(f){
   const seen = new Set();
   for (const c of DATA.claims){ const k=claimKey(c); if(!seen.has(k)){seen.add(k); claims.push(k);} }
   claims.sort();
-  const ipSet = DATA.ips;
-  host.append(el("p","muted","rows = IP, cols = claim; colour = verdict"));
-  const table = el("table","grid");
-  const head = el("tr"); head.append(el("th",""));
-  for (const k of claims) head.append(el("th","", k.replace(/\./g,"\u200b.")));
-  table.append(head);
+  host.append(el("p","muted","rows = IP, cols = claim; cell shows the consensus value; colour = verdict"));
   const byKey = {};
   for (const c of DATA.claims) byKey[c.ip+"|"+claimKey(c)] = c;
-  for (const ip of ipSet){
-    const tr = el("tr"); tr.append(el("th","rowhead", ip));
+  const wrap = el("div","wrap");
+  const table = el("table","matrix");
+  const head = el("tr"); head.append(el("th","claimcol","ip \\ claim"));
+  for (const k of claims) head.append(el("th","", k));
+  table.append(head);
+  for (const ip of DATA.ips){
+    const tr = el("tr"); tr.append(el("th","claimcol", ip));
     for (const k of claims){
-      const td = el("td","cell");
       const c = byKey[ip+"|"+k];
-      const state = c ? c.verdict : "absent";
-      td.textContent = GLYPH[state];
-      td.style.background = COLORS[state] || "#888";
-      td.style.color = state==="absent" ? "#555" : "#0c0f14";
-      if (c) td.addEventListener("click", ()=>showDetail(c));
+      const td = el("td","cell");
+      if (c){
+        td.textContent = c.consensus;
+        td.style.borderLeftColor = COLOR[c.verdict];
+        td.style.background = TINT[c.verdict];
+        td.title = ip+" · "+k+" · "+c.verdict+" : "+c.consensus;
+        td.addEventListener("click", ()=>showDetail(c));
+      } else {
+        td.textContent = ""; td.className = "cell gap";
+      }
       tr.append(td);
     }
     table.append(tr);
   }
-  host.append(table);
+  wrap.append(table); host.append(wrap);
+  host.append(legend(VERDICTS));
 }
 
 function renderProfile(f){
   const host = document.getElementById("tab-profile");
   host.replaceChildren();
   host.append(el("p","muted","agreement profile: conformity with each cell's consensus, not accuracy. A dissenter may be correct."));
-  const rows = DATA.agreement_profile.filter(r => sourceInFilters(r.source, f));
+  const rows = DATA.agreement_profile.filter(r => srcFilter(r.source, f));
   const max = Math.max(1, ...rows.map(r=>r.cells));
   for (const r of rows){
-    const wrap = el("div");
-    const line = el("div","muted", r.source+"  ("+r.cells+" cells)" + (f.q?"":"" ));
-    wrap.append(line);
+    host.append(el("div","muted", r.source+"  ("+r.cells+" cells)"));
     const bars = el("div","bars");
     for (const key of ["agree","dissent","multi","single"]){
       bars.append(el("div","muted", key));
-      const track = el("div"); track.style.width = "100%";
+      const track = el("div","bar-track");
       const bar = el("div","bar");
-      bar.style.background = COLORS[key];
+      bar.style.background = COLOR[key];
       bar.style.width = Math.round(100*r[key]/max)+"%";
       bar.title = key+": "+r[key];
       track.append(bar); bars.append(track);
     }
-    wrap.append(bars);
-    wrap.style.margin = "0 0 10px";
-    host.append(wrap);
+    const box = el("div"); box.style.margin = "0 0 10px"; box.append(bars); host.append(box);
   }
 }
 
 function renderGeo(f){
   const host = document.getElementById("tab-geo");
   host.replaceChildren();
-  host.append(el("p","muted","equirectangular scatter of location claims; graticule every 30°, antimeridian twins drawn at both edges."));
-  const W=900,H=450;
-  const svgNS="http://www.w3.org/2000/svg";
+  host.append(el("p","muted","equirectangular scatter of location claims (coarse Natural Earth 110m outline); graticule every 30°; points duplicated across the antimeridian."));
+  const W=900,H=450, svgNS="http://www.w3.org/2000/svg";
   const svg=document.createElementNS(svgNS,"svg");
-  svg.setAttribute("viewBox","0 0 "+W+" "+H);
+  svg.setAttribute("viewBox","0 0 360 180");
   svg.setAttribute("width","100%"); svg.setAttribute("class","geo");
-  const x=lon=>(lon+180)/360*W, y=lat=>(90-lat)/180*H;
+  if (typeof LAND === "string" && LAND.length){
+    const land=document.createElementNS(svgNS,"path");
+    land.setAttribute("d", LAND);
+    land.setAttribute("fill","#20303f"); land.setAttribute("stroke","#2f4456");
+    land.setAttribute("stroke-width","0.2");
+    svg.append(land);
+  }
   for (let lon=-180; lon<=180; lon+=30){
     const l=document.createElementNS(svgNS,"line");
-    l.setAttribute("x1",x(lon)); l.setAttribute("y1",0); l.setAttribute("x2",x(lon)); l.setAttribute("y2",H);
-    l.setAttribute("stroke","#2b333d"); svg.append(l);
+    l.setAttribute("x1",lon+180); l.setAttribute("y1",0); l.setAttribute("x2",lon+180); l.setAttribute("y2",180);
+    l.setAttribute("stroke","#2b333d"); l.setAttribute("stroke-width","0.2"); svg.append(l);
   }
   for (let lat=-90; lat<=90; lat+=30){
     const l=document.createElementNS(svgNS,"line");
-    l.setAttribute("x1",0); l.setAttribute("y1",y(lat)); l.setAttribute("x2",W); l.setAttribute("y2",y(lat));
-    l.setAttribute("stroke","#2b333d"); svg.append(l);
+    l.setAttribute("x1",0); l.setAttribute("y1",90-lat); l.setAttribute("x2",360); l.setAttribute("y2",90-lat);
+    l.setAttribute("stroke","#2b333d"); l.setAttribute("stroke-width","0.2"); svg.append(l);
   }
-  const ip = selectedIP();
-  const points = DATA.locations.filter(p => (f.q? p.source.toLowerCase().includes(f.q.toLowerCase()): true));
   const palette = ["#4fc3f7","#ffb74d","#81c784","#e57373","#ba68c8","#fff176"];
-  const ipList = DATA.ips;
+  const points = DATA.locations.filter(p => (f.q ? p.source.toLowerCase().includes(f.q.toLowerCase()) : true));
   for (const p of points){
     if (p.latitude===null || p.longitude===null || p.latitude===undefined) continue;
-    const color = palette[ipList.indexOf(p.ip)%palette.length];
+    const color = palette[DATA.ips.indexOf(p.ip)%palette.length];
     for (const shift of [-360,0,360]){
-      const cx = x(p.longitude+shift);
-      if (cx<0 || cx>W) continue;
+      const cx = p.longitude+shift+180;
+      if (cx<0 || cx>360) continue;
       const c=document.createElementNS(svgNS,"circle");
-      c.setAttribute("cx",cx); c.setAttribute("cy",y(p.latitude)); c.setAttribute("r",3);
-      c.setAttribute("fill",color); c.setAttribute("opacity","0.75");
-      const t=document.createElementNS(svgNS,"title"); t.textContent=p.ip+" · "+p.source+" · "+p.city+", "+p.country;
-      c.append(t); svg.append(c);
+      c.setAttribute("cx",cx); c.setAttribute("cy",90-p.latitude); c.setAttribute("r",1.6);
+      c.setAttribute("fill",color); c.setAttribute("opacity","0.8");
+      const t=document.createElementNS(svgNS,"title");
+      t.textContent=p.ip+" · "+p.source+" · "+p.city+", "+p.country; c.append(t); svg.append(c);
     }
   }
   host.append(svg);
-  const legend = el("p","legend");
-  for (const ipx of ipList){ const s=el("span"); const sw=el("span","swatch"); sw.style.background=palette[ipList.indexOf(ipx)%palette.length]; s.append(sw, document.createTextNode(ipx+"  ")); legend.append(s); }
-  host.append(legend);
+  const lg = el("p","legend");
+  for (const ipx of DATA.ips){
+    const item = el("span","item");
+    const sw = el("span","swatch"); sw.style.background = palette[DATA.ips.indexOf(ipx)%palette.length];
+    item.append(sw, document.createTextNode(ipx)); lg.append(item);
+  }
+  host.append(lg);
 }
 
 function renderAll(){
   const f = currentFilters();
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab===f.tab));
   for (const sec of document.querySelectorAll("section")) sec.classList.remove("active");
-  const active = document.getElementById("tab-"+f.tab); (active||document.getElementById("tab-claims")).classList.add("active");
+  (document.getElementById("tab-"+f.tab) || document.getElementById("tab-claims")).classList.add("active");
   document.getElementById("f-q").value = f.q;
   document.getElementById("f-state").value = f.state;
   document.getElementById("f-ip").value = selectedIP();
@@ -357,7 +395,7 @@ function renderAll(){
 
 function init(){
   const meta = document.getElementById("meta");
-  if (!DATA){ meta.textContent = "— no embedded data (open an exported report)"; document.getElementById("legend").textContent=""; return; }
+  if (!DATA){ meta.textContent = "— no embedded data (open an exported report)"; return; }
   meta.textContent = "· schema v"+DATA.schema_version+" · "+DATA.ips.length+" ip(s) · "
     + DATA.claims.length+" claims · latest "+(DATA.latest_observation||"?");
   document.getElementById("count").textContent = DATA.ips.length+" ips";

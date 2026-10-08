@@ -16,7 +16,9 @@ import views
 
 SCHEMA_VERSION = 1
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.html")
+WORLD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "world.txt")
 DATA_TOKEN = "/*__ARANYA_DATA__*/null"
+LAND_TOKEN = "/*__ARANYA_LAND__*/null"
 
 
 def _all_sources(conn) -> list[dict]:
@@ -170,4 +172,6 @@ def _embed(obj: dict) -> str:
 def render_html(obj: dict, template_path: str = TEMPLATE) -> str:
     with open(template_path, encoding="utf-8") as handle:
         template = handle.read()
-    return template.replace(DATA_TOKEN, _embed(obj))
+    with open(WORLD, encoding="utf-8") as handle:
+        land = json.dumps(handle.read())
+    return template.replace(DATA_TOKEN, _embed(obj)).replace(LAND_TOKEN, land)

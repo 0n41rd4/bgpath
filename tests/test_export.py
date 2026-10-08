@@ -85,6 +85,17 @@ class ExportTest(unittest.TestCase):
         self.assertNotIn("@import", text)
         self.assertNotIn("url(http", text)
 
+    def test_html_includes_background_map(self):
+        html = export.render_html(export.build(self.conn))
+        self.assertNotIn(export.LAND_TOKEN, html)
+        self.assertIn('const LAND = "M', html)
+
+    def test_cells_carry_values_not_only_verdicts(self):
+        obj = export.build(self.conn)
+        claims = {(c["ip"], c["topic"], c["key"]): c for c in obj["claims"]}
+        asn = claims[("8.8.8.8", "ownership", "asn")]
+        self.assertEqual(asn["source_labels"]["a"], ["15169"])
+
 
 if __name__ == "__main__":
     unittest.main()

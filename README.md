@@ -77,10 +77,13 @@ python3 aranya.py --export data.json --ips 8.8.8.8,1.1.1.1 --topics location,own
 python3 aranya.py --show-fetch 42                 # print a stored raw body
 ```
 
-Open `report.html` in a browser. Tabs: claims, source heatmap, overview,
-agreement profile, geo. Filter state lives in the URL hash, so views are
-shareable. If `--with-observations` is omitted, drill-down still works but only
-lists provenance and the `--show-fetch ID` command to pull the raw body.
+Open `report.html` in a browser. Tabs: claims, source values, overview,
+agreement profile, geo. Cells carry the actual value (not just a verdict), so
+"agreeing on what" reads directly off the table; the geo tab uses a coarse
+Natural Earth 110m outline (embedded in `world.txt`). Filter state lives in the
+URL hash, so views are shareable. If `--with-observations` is omitted,
+drill-down still works but only lists provenance and the `--show-fetch ID`
+command to pull the raw body.
 
 Design rules the report follows:
 
