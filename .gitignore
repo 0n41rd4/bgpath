@@ -5,3 +5,5 @@ __pycache__/
 venv/
 *.mmdb
 *.mmdb.gz
+.geoip.env
+scripts/.geoip.env
