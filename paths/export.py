@@ -1,9 +1,10 @@
-"""Render a run's graph as a self-contained, layered HTML page.
+"""Render a run as a scan-centric, self-contained HTML graph.
 
-Layers become columns (interface -> machine -> as -> collector -> facility -> ix)
-so the topology reads left to right. Every node/edge carries its attributes and,
-where known, a `source_url` back to the source of truth; BGP session edges carry
-the announcement that produced them (collector, as_path, prefix, peer, time).
+Visual edges are packet traversal only: the measured hop-to-hop chain (including
+ECMP branches and gap edges). Cross-layer facts are shown by **containment**, not
+by crossing edges: hops are grouped into AS boxes and aliased hops are bracketed
+as a machine. Everything else (facilities, IXPs, BGP sessions, collectors) is
+reachable from the click panel with a source-of-truth link.
 """
 
 from __future__ import annotations
@@ -13,39 +14,23 @@ from pathlib import Path
 
 TEMPLATE = Path(__file__).parent / "template.html"
 
-NODE_LAYERS = ["interface", "machine", "as", "collector", "facility", "ix"]
-COLUMN = {layer: index for index, layer in enumerate(NODE_LAYERS)}
-COLUMN_GAP = 240
-ROW_GAP = 54
-TOP = 40
-
-LABELS = {
-    "interface": "interface",
-    "machine": "machine",
-    "as": "AS",
-    "collector": "collector",
-    "facility": "facility",
-    "ix": "IXP",
-}
+W = 150
+H = 30
+COL_GAP = 220
+ROW_GAP = 70
+ORIGIN_X = 140
+ORIGIN_Y = 140
 
 
-def _label(node: dict) -> str:
-    attrs = node["attrs"]
-    if node["layer"] == "as":
-        return node["key"]
-    if node["layer"] == "collector":
-        return attrs.get("name") or node["key"]
-    if node["layer"] in ("facility", "ix"):
-        return attrs.get("name") or node["key"]
-    if node["layer"] == "machine":
-        return f"machine ({len(attrs.get('interfaces') or [])} ifaces)"
-    return node["key"]
-
-
-def _load(conn, run_id: str) -> dict:
+def _load(conn, run_id: str) -> tuple[dict, dict[str, dict], list[dict]]:
     run = conn.execute(
         "SELECT run_id, target, src_ip, tool, started_at FROM runs WHERE run_id = ?", (run_id,)
     ).fetchone()
+    run = (
+        {"run_id": run[0], "target": run[1], "vantage": run[2], "tool": run[3], "started_at": run[4]}
+        if run
+        else {"run_id": run_id}
+    )
     nodes: dict[str, dict] = {}
     for _node_id, layer, key, attrs in conn.execute("SELECT node_id, layer, key, attrs FROM nodes"):
         nodes[key] = {"id": key, "layer": layer, "key": key, "attrs": json.loads(attrs or "{}")}
@@ -56,11 +41,8 @@ def _load(conn, run_id: str) -> dict:
         (run_id,),
     ):
         data = json.loads(attrs or "{}")
-        for endpoint in (src, dst):
-            nodes.setdefault(endpoint, {"id": endpoint, "layer": "interface", "key": endpoint, "attrs": {}})
         edges.append(
             {
-                "id": f"{layer}:{src}->{dst}",
                 "source": src,
                 "target": dst,
                 "layer": layer,
@@ -71,44 +53,147 @@ def _load(conn, run_id: str) -> dict:
                 "source_url": data.get("source_url"),
             }
         )
-    return {
-        "run": {"run_id": run[0], "target": run[1], "vantage": run[2], "tool": run[3], "started_at": run[4]} if run else {"run_id": run_id},
-        "nodes": nodes,
-        "edges": edges,
-    }
+    return run, nodes, edges
 
 
-def _layout(nodes: dict[str, dict], edges: list[dict]) -> None:
-    ttl: dict[str, int] = {}
-    for edge in edges:
-        if edge["layer"] == "interface" and edge["ttl"] is not None:
-            ttl[edge["target"]] = min(ttl.get(edge["target"], 10 ** 9), edge["ttl"])
-    by_layer: dict[str, list[dict]] = {}
-    for node in nodes.values():
-        by_layer.setdefault(node["layer"], []).append(node)
-    for layer, items in by_layer.items():
-        if layer == "interface":
-            items.sort(key=lambda node: (ttl.get(node["id"], 10 ** 9), node["id"]))
-        else:
-            items.sort(key=lambda node: node["id"])
-        column_x = COLUMN.get(layer, len(NODE_LAYERS)) * COLUMN_GAP + 80
-        tallest = max(len(items) for items in by_layer.values())
-        offset = (tallest - len(items)) * ROW_GAP / 2
-        for index, node in enumerate(items):
-            node["x"] = column_x
-            node["y"] = TOP + offset + index * ROW_GAP
+def _hop_ttl(conn, run_id: str) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT src_ip, MIN(ttl) FROM hops WHERE run_id = ? AND src_ip IS NOT NULL GROUP BY src_ip",
+        (run_id,),
+    ).fetchall()
+    return {ip: ttl for ip, ttl in rows}
 
 
 def build(conn, run_id: str) -> dict:
-    data = _load(conn, run_id)
-    for node in data["nodes"].values():
-        node["label"] = _label(node)
-        node["source_url"] = node["attrs"].get("source_url")
-    _layout(data["nodes"], data["edges"])
-    data["nodes"] = list(data["nodes"].values())
-    data["node_layers"] = NODE_LAYERS
-    data["labels"] = LABELS
-    return data
+    run, nodes, edges = _load(conn, run_id)
+    target = run.get("target")
+    ttl = _hop_ttl(conn, run_id)
+
+    traversal = [edge for edge in edges if edge["layer"] == "interface"]
+    trace: set[str] = set()
+    for edge in traversal:
+        trace.add(edge["source"])
+        trace.add(edge["target"])
+    if target:
+        trace.add(target)
+
+    as_of = {e["source"]: e["target"] for e in edges if e["layer"] == "origin" and e["source"] in trace}
+    machine_of = {e["source"]: e["target"] for e in edges if e["layer"] == "machine" and e["source"] in trace}
+
+    columns: dict[int, list[str]] = {}
+    for ip in trace:
+        columns.setdefault(ttl.get(ip, 0), []).append(ip)
+    order = sorted(columns)
+    index = {value: position for position, value in enumerate(order)}
+    tallest = max(len(members) for members in columns.values())
+    position: dict[str, tuple[float, float]] = {}
+    for value, members in columns.items():
+        members.sort()
+        offset = (tallest - len(members)) * ROW_GAP / 2
+        for row, ip in enumerate(members):
+            position[ip] = (ORIGIN_X + index[value] * COL_GAP, ORIGIN_Y + offset + row * ROW_GAP)
+
+    hops = []
+    for ip in sorted(trace):
+        x, y = position[ip]
+        hops.append(
+            {
+                "id": ip,
+                "ttl": ttl.get(ip),
+                "x": x,
+                "y": y,
+                "as": as_of.get(ip),
+                "machine": machine_of.get(ip),
+                "is_target": ip == target,
+                "attrs": nodes.get(ip, {}).get("attrs", {}),
+                "source_url": nodes.get(ip, {}).get("attrs", {}).get("source_url") or f"https://stat.ripe.net/{ip}",
+            }
+        )
+
+    def box(members: list[str], pad: float) -> dict:
+        xs = [position[ip][0] for ip in members if ip in position]
+        ys = [position[ip][1] for ip in members if ip in position]
+        return {
+            "x": min(xs) - pad,
+            "y": min(ys) - pad - 16,
+            "w": max(xs) - min(xs) + W + 2 * pad,
+            "h": max(ys) - min(ys) + H + 2 * pad + 16,
+        }
+
+    containers = []
+    as_members: dict[str, list[str]] = {}
+    for ip, asn in as_of.items():
+        as_members.setdefault(asn, []).append(ip)
+    for asn, members in sorted(as_members.items()):
+        info = _as_info(edges, asn)
+        containers.append({"id": f"as:{asn}", "kind": "as", "label": asn, **box(members, 12), "info": info})
+
+    machine_members: dict[str, list[str]] = {}
+    for ip, machine in machine_of.items():
+        machine_members.setdefault(machine, []).append(ip)
+    for machine, members in sorted(machine_members.items()):
+        containers.append({"id": f"machine:{machine}", "kind": "machine", "label": "same machine", **box(members, 6), "info": {}})
+
+    out_edges = []
+    for edge in traversal:
+        if edge["source"] in position and edge["target"] in position:
+            out_edges.append(
+                {
+                    "source": edge["source"],
+                    "target": edge["target"],
+                    "gap": bool(edge["attrs"].get("gap")),
+                    "count": edge["count"],
+                    "min_rtt_ms": edge["min_rtt_ms"],
+                    "ttl": edge["ttl"],
+                }
+            )
+
+    return {
+        "run": run,
+        "hops": hops,
+        "containers": containers,
+        "edges": out_edges,
+        "sessions": _sessions(edges),
+        "facilities": _node_list(nodes, edges, "facility"),
+        "ixps": _node_list(nodes, edges, "ix"),
+    }
+
+
+def _as_info(edges: list[dict], asn: str) -> dict:
+    facilities = [e["target"] for e in edges if e["layer"] == "facility" and e["source"] == asn]
+    ixps = [e["target"] for e in edges if e["layer"] == "ix" and e["source"] == asn]
+    return {
+        "facilities": sorted(set(facilities)),
+        "ixps": sorted(set(ixps)),
+        "source_url": f"https://stat.ripe.net/{asn}",
+    }
+
+
+def _sessions(edges: list[dict]) -> list[dict]:
+    sessions = []
+    for edge in edges:
+        if edge["layer"] != "session":
+            continue
+        sessions.append(
+            {
+                "speaker": edge["source"],
+                "collector": edge["attrs"].get("collector"),
+                "as_path": edge["attrs"].get("as_path"),
+                "prefix": edge["attrs"].get("prefix"),
+                "timestamp": edge["attrs"].get("timestamp"),
+                "source_url": edge["source_url"],
+            }
+        )
+    sessions.sort(key=lambda item: (item.get("prefix") or "", item.get("speaker") or ""))
+    return sessions
+
+
+def _node_list(nodes: dict[str, dict], edges: list[dict], layer: str) -> list[dict]:
+    items = {}
+    for key, node in nodes.items():
+        if node["layer"] == layer:
+            items[key] = {"id": key, "name": node["attrs"].get("name") or key, "source_url": node["attrs"].get("source_url")}
+    return sorted(items.values(), key=lambda item: item["id"])
 
 
 def _embed(data: dict) -> str:
@@ -117,6 +202,5 @@ def _embed(data: dict) -> str:
 
 
 def render_html(conn, run_id: str) -> str:
-    data = build(conn, run_id)
     template = TEMPLATE.read_text()
-    return template.replace("/*__PATHS_DATA__*/", _embed(data))
+    return template.replace("/*__PATHS_DATA__*/", _embed(build(conn, run_id)))

@@ -25,6 +25,17 @@ announcing IP is attributed to more than one AS. This is the AS-level signal;
 once alias resolution (merging interfaces into machines) lands, the
 interface-level case will be detected too.
 
+## Visualisation
+
+`python -m paths html [run_id] -o paths.html` writes a self-contained page. It is
+scan-centric: **edges are packet traversal only** (the measured hop chain, with
+ECMP branches solid and unanswered-TTL gaps dashed), and cross-layer facts are
+shown by **containment** — hops are grouped into AS boxes, and aliased hops are
+bracketed as a "same machine" box — instead of crossing edges. Hover gives a
+tooltip; click opens a panel with the node/edge attributes and a source-of-truth
+link. Facilities, IXPs and the BGP sessions (with collector, AS path and prefix)
+are listed in the panel, each linking back to its source.
+
 ## Layers
 
 | Layer | Node | Edge | Source |

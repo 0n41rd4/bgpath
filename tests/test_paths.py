@@ -193,17 +193,22 @@ class ExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             conn = store.open_store(os.path.join(tmp, "p.db"))
             store.save_run(conn, {"run_id": "r1", "target": "8.8.8.8", "src_ip": "1.2.3.4", "tool": "scamper", "started_at": "t"})
+            store.save_hops(conn, "r1", [
+                {"flow_id": 1, "ttl": 1, "src_ip": "1.2.3.4", "rtt_ms": 1.0, "icmp_type": 11, "icmp_code": 0, "is_last": False},
+                {"flow_id": 1, "ttl": 2, "src_ip": "8.8.8.8", "rtt_ms": 5.0, "icmp_type": 3, "icmp_code": 3, "is_last": True},
+            ])
             store.add_node(conn, "interface", "8.8.8.8")
             store.add_node(conn, "as", "AS15169", {"asn": "15169"})
+            store.add_edge(conn, "r1", "interface", "1.2.3.4", "8.8.8.8", ttl=2, rtt_ms=5.0)
             store.add_edge(conn, "r1", "origin", "8.8.8.8", "AS15169", attrs={"source_url": "https://stat.ripe.net/8.8.8.8"})
             data = paths_export.build(conn, "r1")
             html = paths_export.render_html(conn, "r1")
             conn.close()
 
-        self.assertEqual(len(data["nodes"]), 2)
+        self.assertEqual(len(data["hops"]), 2)
         self.assertEqual(len(data["edges"]), 1)
-        self.assertTrue(all("x" in node and "y" in node for node in data["nodes"]))
-        self.assertEqual(data["edges"][0]["source_url"], "https://stat.ripe.net/8.8.8.8")
+        self.assertTrue(all("x" in hop and "y" in hop for hop in data["hops"]))
+        self.assertEqual([c["label"] for c in data["containers"]], ["AS15169"])
         self.assertNotIn("/*__PATHS_DATA__*/", html)
         self.assertIn("AS15169", html)
 

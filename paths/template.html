@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aranya · path graph</title>
+<title>aranya · scan graph</title>
 <style>
   :root { --bg:#0b1020; --panel:#141a2e; --ink:#e6ebf5; --muted:#8b96b0; --line:#26304a; }
   * { box-sizing: border-box; }
@@ -12,225 +12,175 @@
   header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
   header h1 { font-size:14px; margin:0; }
   header .meta { color:var(--muted); }
-  #legend { display:flex; gap:12px; flex-wrap:wrap; padding:8px 14px; border-bottom:1px solid var(--line); }
-  #legend label { display:flex; gap:6px; align-items:center; color:var(--muted); cursor:pointer; user-select:none; }
-  #legend input { accent-color:#4b6; }
-  .swatch { width:10px; height:10px; border-radius:2px; display:inline-block; }
-  #wrap { display:flex; height:calc(100vh - 90px); }
+  .hint { color:var(--muted); }
+  #wrap { display:flex; height:calc(100vh - 52px); }
   #canvas { flex:1; overflow:hidden; position:relative; cursor:grab; }
   #canvas.grabbing { cursor:grabbing; }
   svg { display:block; }
-  .node rect { stroke:#0b1020; stroke-width:1.5; rx:5; }
-  .node text { fill:#fff; font-size:11px; pointer-events:none; }
+  .hop rect { stroke:#0b1020; stroke-width:1.5; rx:5; }
+  .hop text { fill:#fff; font-size:11px; pointer-events:none; }
   .edge { fill:none; }
-  .edge.hit { stroke:transparent; stroke-width:14; }
-  #panel { width:340px; border-left:1px solid var(--line); background:var(--panel); padding:14px; overflow:auto; }
-  #panel h2 { font-size:12px; margin:0 0 8px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
-  #panel .kv { margin:0 0 6px; word-break:break-word; }
+  .asbox { fill:#16a34a14; stroke:#16a34a88; stroke-width:1; }
+  .machinebox { fill:none; stroke:#7c3aed; stroke-width:1.5; stroke-dasharray:5 4; }
+  .boxtitle { fill:#cbd5e1; font-size:11px; }
+  #panel { width:380px; border-left:1px solid var(--line); background:var(--panel); padding:14px; overflow:auto; }
+  #panel h2 { font-size:12px; margin:14px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+  #panel h2:first-child { margin-top:0; }
+  #panel .kv { margin:0 0 4px; word-break:break-word; }
   #panel .k { color:var(--muted); }
   #panel a { color:#7dd3fc; }
   #panel table { border-collapse:collapse; width:100%; }
   #panel td { padding:2px 0; vertical-align:top; }
-  #panel td.k { width:90px; color:var(--muted); }
+  #panel td.k { width:96px; color:var(--muted); }
+  #panel .item { border-bottom:1px solid var(--line); padding:6px 0; }
   #tooltip { position:fixed; pointer-events:none; background:#000c; border:1px solid var(--line);
              padding:4px 7px; border-radius:4px; font-size:11px; display:none; z-index:5; }
-  .hint { color:var(--muted); }
 </style>
 </head>
 <body>
 <header>
-  <h1>aranya · path graph</h1>
+  <h1>aranya · scan graph</h1>
   <span class="meta" id="runmeta"></span>
-  <span class="meta hint">drag to pan · wheel to zoom · hover for info · click for detail + source</span>
+  <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · hover + click for detail &amp; source</span>
 </header>
-<div id="legend"></div>
 <div id="wrap">
   <div id="canvas"><svg id="svg"><g id="viewport"></g></svg></div>
-  <aside id="panel"><h2>detail</h2><p class="hint">click a node or an edge</p></aside>
+  <aside id="panel"></aside>
 </div>
 <div id="tooltip"></div>
 <script>
 const DATA = /*__PATHS_DATA__*/;
 const NS = "http://www.w3.org/2000/svg";
 const W = 150, H = 30;
-const NODE_COLOR = { interface:"#2563eb", machine:"#7c3aed", as:"#16a34a",
-                     collector:"#ea580c", facility:"#db2777", ix:"#0891b2" };
-const EDGE_COLOR = { interface:"#2563eb", machine:"#7c3aed", origin:"#94a3b8",
-                     as:"#16a34a", session:"#ea580c", facility:"#db2777", ix:"#0891b2" };
-const nodeById = {};
-DATA.nodes.forEach(n => nodeById[n.id] = n);
-const hidden = new Set();
-
-document.getElementById("runmeta").textContent =
-  DATA.run.target + "  ·  vantage " + (DATA.run.vantage||"?") + "  ·  " + (DATA.run.tool||"") +
-  "  ·  " + (DATA.run.started_at||"");
-
+const AS_PALETTE = ["#16a34a","#0ea5e9","#a855f7","#f59e0b","#ef4444","#14b8a6","#84cc16","#e879f9"];
+const hopById = {}; DATA.hops.forEach(h => hopById[h.id] = h);
 const svg = document.getElementById("svg");
 const viewport = document.getElementById("viewport");
 const tooltip = document.getElementById("tooltip");
 const panel = document.getElementById("panel");
+const canvas = document.getElementById("canvas");
 let scale = 1, tx = 0, ty = 0;
 
-function el(name, attrs) {
-  const node = document.createElementNS(NS, name);
-  for (const k in attrs) node.setAttribute(k, attrs[k]);
-  return node;
-}
-
-function edgePath(e) {
-  const a = nodeById[e.source], b = nodeById[e.target];
-  if (!a || !b) return null;
-  const ax = a.x + W, ay = a.y + H/2, bx = b.x, by = b.y + H/2;
-  if (Math.abs(a.x - b.x) < 1) {  // same column: small arc on the right
-    const bulge = 26;
-    return `M${ax},${ay} C${ax+bulge},${ay} ${bx+W+bulge},${by} ${bx+W},${by}`;
-  }
-  const mid = (ax + bx) / 2;
-  return `M${ax},${ay} C${mid},${ay} ${mid},${by} ${bx},${by}`;
-}
-
-function edgeLabel(e) {
-  const bits = [e.layer];
-  if (e.attrs && e.attrs.collector) bits.push("collector " + e.attrs.collector);
-  if (e.attrs && e.attrs.as_path) bits.push("path " + e.attrs.as_path);
-  return bits.join(" · ");
-}
+function el(name, attrs) { const n = document.createElementNS(NS, name); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
+function colorFor(asn) { let s = 0; for (const c of (asn||"")) s = (s*31 + c.charCodeAt(0))>>>0; return AS_PALETTE[s % AS_PALETTE.length]; }
 
 function draw() {
   viewport.textContent = "";
+  for (const c of DATA.containers) {
+    const g = el("g", {class:"container"});
+    if (c.kind === "as") {
+      g.appendChild(el("rect", {class:"asbox", x:c.x, y:c.y, width:c.w, height:c.h, rx:10, stroke:colorFor(c.label)}));
+      const t = el("text", {class:"boxtitle", x:c.x+8, y:c.y+14}); t.textContent = c.label; g.appendChild(t);
+      g.addEventListener("mousemove", ev => tip(ev, "AS container · " + c.label));
+      g.addEventListener("click", ev => { ev.stopPropagation(); showAs(c); });
+    } else {
+      g.appendChild(el("rect", {class:"machinebox", x:c.x, y:c.y, width:c.w, height:c.h, rx:8}));
+      g.addEventListener("mousemove", ev => tip(ev, "same machine"));
+    }
+    g.addEventListener("mouseleave", hideTip);
+    viewport.appendChild(g);
+  }
   for (const e of DATA.edges) {
-    if (hidden.has(e.layer)) continue;
-    const d = edgePath(e);
-    if (!d) continue;
-    const g = el("g", {class:"edge"});
-    g.appendChild(el("path", {class:"edge hit", d, stroke:EDGE_COLOR[e.layer]||"#888",
-                              "stroke-width": 1 + Math.min(e.count||1, 5)}));
-    g.appendChild(el("path", {class:"edge", d, stroke:EDGE_COLOR[e.layer]||"#888",
-                              "stroke-width": 1 + Math.min(e.count||1, 5), opacity:0.75}));
-    g.addEventListener("mousemove", ev => showTip(ev, edgeLabel(e)));
+    const a = hopById[e.source], b = hopById[e.target];
+    if (!a || !b) continue;
+    const ax = a.x + W, ay = a.y + H/2, bx = b.x, by = b.y + H/2, mid = (ax+bx)/2;
+    const d = Math.abs(a.x-b.x) < 1
+      ? `M${ax},${ay} C${ax+26},${ay} ${bx+W+26},${by} ${bx+W},${by}`
+      : `M${ax},${ay} C${mid},${ay} ${mid},${by} ${bx},${by}`;
+    const g = el("g");
+    g.appendChild(el("path", {class:"edge", d, stroke:"#60a5fa", "stroke-width": 1.5 + Math.min(e.count,4),
+                              "stroke-dasharray": e.gap ? "6 5" : "none", opacity:0.9}));
+    g.appendChild(el("path", {class:"edge", d, stroke:"transparent", "stroke-width":14}));
+    g.addEventListener("mousemove", ev => tip(ev, `hop → hop · ttl ${e.ttl}${e.gap ? " · gap" : ""}${e.min_rtt_ms!=null ? " · "+e.min_rtt_ms.toFixed(1)+"ms" : ""}`));
     g.addEventListener("mouseleave", hideTip);
     g.addEventListener("click", ev => { ev.stopPropagation(); showEdge(e); });
     viewport.appendChild(g);
   }
-  for (const n of DATA.nodes) {
-    if (hidden.has(n.layer)) continue;
-    const g = el("g", {class:"node", transform:`translate(${n.x},${n.y})`});
-    g.appendChild(el("rect", {width:W, height:H, fill:NODE_COLOR[n.layer]||"#666"}));
+  for (const h of DATA.hops) {
+    const g = el("g", {class:"hop", transform:`translate(${h.x},${h.y})`});
+    g.appendChild(el("rect", {width:W, height:H, fill:h.is_target ? "#f59e0b" : (h.as ? colorFor(h.as) : "#475569")}));
     const t = el("text", {x:8, y:19});
-    t.textContent = n.label.length > 22 ? n.label.slice(0,21)+"…" : n.label;
+    t.textContent = (h.ttl!=null ? h.ttl+"  " : "") + h.id;
     g.appendChild(t);
-    g.addEventListener("mousemove", ev => showTip(ev, n.layer + " · " + n.label));
+    g.addEventListener("mousemove", ev => tip(ev, "hop · " + h.id + (h.as ? " · " + h.as : "")));
     g.addEventListener("mouseleave", hideTip);
-    g.addEventListener("click", ev => { ev.stopPropagation(); showNode(n); });
+    g.addEventListener("click", ev => { ev.stopPropagation(); showHop(h); });
     viewport.appendChild(g);
   }
 }
 
-function showTip(ev, text) {
-  tooltip.textContent = text;
-  tooltip.style.display = "block";
-  tooltip.style.left = (ev.clientX + 12) + "px";
-  tooltip.style.top = (ev.clientY + 12) + "px";
-}
-function hideTip() { tooltip.style.display = "none"; }
+function tip(ev, text) { tooltip.textContent = text; tooltip.style.display="block";
+  tooltip.style.left=(ev.clientX+12)+"px"; tooltip.style.top=(ev.clientY+12)+"px"; }
+function hideTip() { tooltip.style.display="none"; }
 
-function rows(entries) {
-  const table = document.createElement("table");
-  for (const [k, v] of entries) {
-    if (v === null || v === undefined || v === "") continue;
-    const tr = document.createElement("tr");
-    const kd = document.createElement("td"); kd.className = "k"; kd.textContent = k;
-    const vd = document.createElement("td"); vd.textContent = String(v);
-    tr.appendChild(kd); tr.appendChild(vd); table.appendChild(tr);
-  }
-  return table;
-}
+function title(t) { const h=document.createElement("h2"); h.textContent=t; return h; }
+function rows(entries) { const tb=document.createElement("table");
+  for (const [k,v] of entries) { if (v==null||v==="") continue;
+    const tr=document.createElement("tr"); const kd=document.createElement("td"); kd.className="k"; kd.textContent=k;
+    const vd=document.createElement("td"); vd.textContent=String(v); tr.append(kd,vd); tb.appendChild(tr); } return tb; }
+function link(url) { if(!url) return null; const a=document.createElement("a"); a.href=url; a.target="_blank";
+  a.rel="noopener noreferrer"; a.textContent="source ↗"; return a; }
+function item(text, url) { const d=document.createElement("div"); d.className="item"; d.textContent=text;
+  const a=link(url); if(a){ d.appendChild(document.createElement("br")); d.appendChild(a);} return d; }
 
-function link(url) {
-  if (!url) return null;
-  const a = document.createElement("a");
-  a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer";
-  a.textContent = "source ↗";
-  return a;
-}
-
-function showNode(n) {
+function showHop(h) {
   panel.textContent = "";
-  panel.appendChild(title(n.layer.toUpperCase() + " · " + n.label));
-  panel.appendChild(rows([["id", n.id]]));
-  const url = link(n.source_url); if (url) panel.appendChild(url);
-  panel.appendChild(rows(Object.entries(n.attrs || {})));
+  panel.appendChild(title("HOP"));
+  panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as], ["machine", h.machine]]));
+  const a = link(h.source_url); if (a) panel.appendChild(a);
 }
-
 function showEdge(e) {
   panel.textContent = "";
-  panel.appendChild(title("EDGE · " + e.layer));
-  panel.appendChild(rows([["from", e.source], ["to", e.target], ["ttl", e.ttl],
-                          ["count", e.count], ["min_rtt_ms", e.min_rtt_ms]]));
-  const url = link(e.source_url); if (url) panel.appendChild(url);
-  panel.appendChild(rows(Object.entries(e.attrs || {})));
+  panel.appendChild(title("TRAVERSAL EDGE"));
+  panel.appendChild(rows([["from", e.source], ["to", e.target], ["ttl", e.ttl], ["flows", e.count],
+                          ["min_rtt_ms", e.min_rtt_ms], ["gap", e.gap ? "yes" : "no"]]));
+}
+function showAs(c) {
+  panel.textContent = "";
+  panel.appendChild(title("AS CONTAINER · " + c.label));
+  const a = link(c.info.source_url); if (a) panel.appendChild(a);
+  panel.appendChild(title("facilities"));
+  if (!c.info.facilities.length) panel.appendChild(rows([["", "none known"]]));
+  for (const f of c.info.facilities) panel.appendChild(item(f, null));
+  panel.appendChild(title("IXPs"));
+  if (!c.info.ixps.length) panel.appendChild(rows([["", "none known"]]));
+  for (const x of c.info.ixps) panel.appendChild(item(x, null));
 }
 
-function title(text) {
-  const h = document.createElement("h2"); h.textContent = text; return h;
+function summary() {
+  panel.textContent = "";
+  panel.appendChild(title("SCAN"));
+  panel.appendChild(rows([["target", DATA.run.target], ["vantage", DATA.run.vantage],
+                          ["tool", DATA.run.tool], ["hops", DATA.hops.length], ["edges", DATA.edges.length]]));
+  panel.appendChild(title("BGP sessions · " + DATA.sessions.length));
+  for (const s of DATA.sessions.slice(0, 40))
+    panel.appendChild(item(`${s.speaker} → ${s.collector}  [${s.as_path}]`, s.source_url));
+  panel.appendChild(title("facilities · " + DATA.facilities.length));
+  for (const f of DATA.facilities) panel.appendChild(item(f.name, f.source_url));
+  panel.appendChild(title("IXPs · " + DATA.ixps.length));
+  for (const x of DATA.ixps) panel.appendChild(item(x.name, x.source_url));
 }
-
-const legend = document.getElementById("legend");
-for (const layer of DATA.node_layers) {
-  const label = document.createElement("label");
-  const cb = document.createElement("input");
-  cb.type = "checkbox"; cb.checked = true;
-  cb.addEventListener("change", () => { cb.checked ? hidden.delete(layer) : hidden.add(layer); draw(); });
-  const sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = NODE_COLOR[layer];
-  const name = document.createElement("span"); name.textContent = DATA.labels[layer] || layer;
-  label.append(cb, sw, name);
-  legend.appendChild(label);
-}
-
-const canvas = document.getElementById("canvas");
-canvas.addEventListener("mousedown", ev => {
-  canvas.classList.add("grabbing");
-  const sx = ev.clientX - tx, sy = ev.clientY - ty;
-  const move = e2 => { tx = e2.clientX - sx; ty = e2.clientY - sy; apply(); };
-  const up = () => { canvas.classList.remove("grabbing");
-                     document.removeEventListener("mousemove", move);
-                     document.removeEventListener("mouseup", up); };
-  document.addEventListener("mousemove", move);
-  document.addEventListener("mouseup", up);
-});
-canvas.addEventListener("wheel", ev => {
-  ev.preventDefault();
-  scale = Math.max(0.25, Math.min(3, scale * (ev.deltaY < 0 ? 1.1 : 0.9)));
-  apply();
-}, {passive:false});
 
 function apply() { viewport.setAttribute("transform", `translate(${tx},${ty}) scale(${scale})`); }
+function bounds() { let mx=0,my=0;
+  for (const h of DATA.hops) { mx=Math.max(mx,h.x+W); my=Math.max(my,h.y+H); }
+  for (const c of DATA.containers) { mx=Math.max(mx,c.x+c.w); my=Math.max(my,c.y+c.h); }
+  return {mx:mx+160, my:my+160}; }
+function sizeSvg() { const b=bounds(); svg.setAttribute("width",b.mx); svg.setAttribute("height",b.my); }
+function fit() { sizeSvg(); const b=bounds();
+  scale=Math.min(canvas.clientWidth/b.mx, canvas.clientHeight/b.my, 1); tx=12; ty=12; apply(); }
 
-function bounds() {
-  let mx = 0, my = 0;
-  for (const n of DATA.nodes) {
-    if (hidden.has(n.layer)) continue;
-    mx = Math.max(mx, n.x + W); my = Math.max(my, n.y + H);
-  }
-  return {mx: mx + 200, my: my + 200};
-}
+canvas.addEventListener("mousedown", ev => {
+  canvas.classList.add("grabbing");
+  const sx=ev.clientX-tx, sy=ev.clientY-ty;
+  const move=e2=>{tx=e2.clientX-sx; ty=e2.clientY-sy; apply();};
+  const up=()=>{canvas.classList.remove("grabbing"); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up);};
+  document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
+});
+canvas.addEventListener("wheel", ev => { ev.preventDefault();
+  scale=Math.max(0.25, Math.min(3, scale*(ev.deltaY<0?1.1:0.9))); apply(); }, {passive:false});
 
-function sizeSvg() {
-  const b = bounds();
-  svg.setAttribute("width", b.mx);
-  svg.setAttribute("height", b.my);
-}
-
-function fit() {
-  sizeSvg();
-  const b = bounds();
-  scale = Math.min(canvas.clientWidth / b.mx, canvas.clientHeight / b.my, 1);
-  tx = 12; ty = 12;
-  apply();
-}
-
-draw();
-fit();
+draw(); fit(); summary();
 window.addEventListener("resize", () => { sizeSvg(); apply(); });
 </script>
 </body>
