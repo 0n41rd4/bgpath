@@ -153,6 +153,17 @@ makes a disagreement meaningful:
 | `globalping.ping` | Globalping community probes | observed-active |
 | `atlas.ping` | RIPE Atlas probes | observed-active |
 
+## Deferred sources
+
+Independent backends worth adding later, deliberately not wired yet (none is a
+re-front of data we already collect):
+
+| Source | Backend / vantage | Setup | Why deferred |
+|---|---|---|---|
+| Cloudflare Radar | Cloudflare's own global network (BGP + traffic analytics) | free API token (`CLOUDFLARE_RADAR_TOKEN`) | independent vantage, but key-gated |
+| GreyNoise | GreyNoise's own sensor network | community API key (`GREYNOISE_API_KEY`) | distinct sensor set, but a security/reputation data class |
+| Censys | Censys' own scanning network | API ID + secret (`CENSYS_API_ID`/`CENSYS_API_SECRET`) | distinct scanner set; same class as Shodan |
+
 ## Optional sources
 
 These sources need credentials or a local database file; without them they are
