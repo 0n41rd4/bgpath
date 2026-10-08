@@ -90,7 +90,7 @@ def cmd_trace(args) -> int:
         )
         print(
             f"  AS names: {stats['named']}, hops geolocated: {stats['located']}, "
-            f"ASes with Atlas probes: {stats['probed']}"
+            f"facility coords: {stats['facility_geo']}, ASes with Atlas probes: {stats['probed']}"
         )
         sessions = stats["sessions"]
         print(

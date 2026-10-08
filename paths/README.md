@@ -77,6 +77,22 @@ AS boxes show the AS **name** (PeeringDB / RIPEstat) and, when available, the
 number of **RIPE Atlas probes** in that AS by country (`atlas.probes`), i.e.
 evidence that the AS is present where we suspect it.
 
+- **RTT vs geolocation.** Each hop carries `min_rtt_ms`; one-way distance is
+  bounded by `rtt_ms × 100 km` (fiber). A suspected handoff whose geolocated
+  distance exceeds that bound is flagged implausible, and the hop with the
+  largest RTT (the long-haul segment) is marked — if the AS also changes there,
+  that is the real handoff hop, stronger than intersecting facility lists.
+- **BGP advertisement correlation.** RouteViews announcements for the target
+  prefix are grouped per collector (each with coordinates), giving where the
+  prefix is seen and the AS paths there. A suspected facility is supported by
+  `bgp` when a collector where the prefix is seen is within 100 km, or by
+  `bgp-country` when one is in the same country; a facility that is only
+  `geo`-suspected (no shared membership, no BGP reach) is flagged **weak** and
+  can be ruled out. Facility coordinates come from PeeringDB `fac` and IX
+  peering-LAN prefixes from `ixpfx`, fetched only for candidate IXPs/facilities
+  (shared or matching a geolocated hop city) so no run fans out over an AS's
+  full portfolio.
+
 ## Layers
 
 | Layer | Node | Edge | Source |

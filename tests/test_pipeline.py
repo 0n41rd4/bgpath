@@ -14,7 +14,10 @@ import store
 RIPE = Path(__file__).parent / "fixtures" / "ripe"
 OTHERS = Path(__file__).parent / "fixtures" / "others"
 
-OPTIONAL = {"ipinfo", "shodan.host", "maxmind.geolite2", "maxmind.asn", "dbip.lite"}
+OPTIONAL = {
+    "ipinfo", "shodan.host", "maxmind.geolite2", "maxmind.asn", "dbip.lite",
+    "peeringdb.fac", "peeringdb.ixpfx",
+}
 
 
 def make_fetch():

@@ -8,6 +8,7 @@ these instead of talking to the network itself.
 from __future__ import annotations
 
 import json
+import time
 
 import cache
 import observe
@@ -36,6 +37,8 @@ def fetch_parsed(adapter_id: str, ip: str = "", context: dict | None = None, ref
         status, body, error = sources.http_get(url)
     if error:
         raise RuntimeError(f"{adapter_id}: {error}")
+    if adapter.get("delay"):
+        time.sleep(adapter["delay"])
     parsed, _ = observe.observe(adapter, ip, body)
     cache.put(key, parsed)
     return parsed
@@ -97,6 +100,13 @@ def _geo_from(adapter_id: str, parsed: dict) -> dict | None:
         best = max(locations, key=lambda item: item.get("covered_percentage") or 0)
         loc = {"city": best.get("city"), "country": best.get("country"),
                "latitude": best.get("latitude"), "longitude": best.get("longitude")}
+    elif adapter_id == "ipmap":
+        locations = parsed.get("locations") or []
+        if not locations:
+            return None
+        best = max(locations, key=lambda item: item.get("score") or 0)
+        loc = {"city": best.get("city"), "country": best.get("country"),
+               "latitude": best.get("latitude"), "longitude": best.get("longitude")}
     else:
         return None
     if not (loc["city"] or loc["country"] or loc["latitude"] is not None):
@@ -105,7 +115,7 @@ def _geo_from(adapter_id: str, parsed: dict) -> dict | None:
 
 
 def geo(ip: str) -> dict | None:
-    for adapter_id in ("maxmind.geolite2", "dbip.lite", "ipwho.is", "ripestat.geoloc"):
+    for adapter_id in ("maxmind.geolite2", "dbip.lite", "ipwho.is", "ipmap", "ripestat.geoloc"):
         try:
             parsed = fetch_parsed(adapter_id, ip)
         except Exception:
@@ -133,3 +143,17 @@ def facilities(net_id) -> list[dict]:
 
 def ixps(net_id) -> list[dict]:
     return fetch_parsed("peeringdb.netixlan", context={"net_id": net_id}).get("ix") or []
+
+
+def facility_info(fac_id) -> dict | None:
+    try:
+        return fetch_parsed("peeringdb.fac", context={"fac_id": fac_id})
+    except Exception:
+        return None
+
+
+def ix_prefixes(ixlan_id) -> list[dict]:
+    try:
+        return fetch_parsed("peeringdb.ixpfx", context={"ixlan_id": ixlan_id}).get("prefixes") or []
+    except Exception:
+        return []

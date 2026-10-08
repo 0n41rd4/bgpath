@@ -13,6 +13,8 @@ import json
 import os
 import time
 
+VERSION = 2
+
 
 def _dir() -> str:
     return os.environ.get("PATHS_CACHE") or os.path.join(os.path.expanduser("~"), ".cache", "aranya", "paths")
@@ -23,7 +25,8 @@ def enabled() -> bool:
 
 
 def make(*parts) -> str:
-    return hashlib.sha1("|".join(str(part) for part in parts).encode()).hexdigest()
+    payload = "|".join(str(part) for part in (VERSION, *parts))
+    return hashlib.sha1(payload.encode()).hexdigest()
 
 
 def _path(key: str) -> str:

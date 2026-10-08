@@ -86,6 +86,31 @@ def _layer_map(nodes: dict[str, dict], layer: str) -> dict[str, dict]:
     return {key: node["attrs"] for key, node in nodes.items() if node["layer"] == layer}
 
 
+def _collectors(edges: list[dict], nodes: dict[str, dict]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for edge in edges:
+        if edge["layer"] != "session":
+            continue
+        name = edge["attrs"].get("collector")
+        if not name:
+            continue
+        entry = out.setdefault(
+            name,
+            {"collector": name, "prefix": edge["attrs"].get("prefix"), "as_paths": [],
+             "peers": [], "source_url": edge["source_url"], "geo": None},
+        )
+        path = edge["attrs"].get("as_path")
+        if path and path not in entry["as_paths"]:
+            entry["as_paths"].append(path)
+        if edge["source"] and edge["source"] not in entry["peers"]:
+            entry["peers"].append(edge["source"])
+    for name, entry in out.items():
+        attrs = nodes.get(f"COL:{name}", {}).get("attrs", {})
+        if attrs.get("lat") is not None:
+            entry["geo"] = {"latitude": attrs.get("lat"), "longitude": attrs.get("lng"), "country": attrs.get("country")}
+    return out
+
+
 def build(conn, run_id: str) -> dict:
     run, nodes, edges = _load(conn, run_id)
     target = run.get("target")
@@ -110,9 +135,13 @@ def build(conn, run_id: str) -> dict:
     trust = analysis.ttl_trust(_raw_hops(conn, run_id))
     geo_of = {ip: nodes.get(ip, {}).get("attrs", {}).get("geo") for ip in trace}
     gap_before = {edge["target"] for edge in traversal if edge["attrs"].get("gap")}
+    rtt_of = {ip: (trust.get(ip) or {}).get("rtt_ms") for ip in trace}
+    measured = [ip for ip in trace if rtt_of.get(ip) is not None]
+    long_haul = max(measured, key=lambda ip: rtt_of[ip]) if measured else None
 
     ix_nodes = _layer_map(nodes, "ix")
     fac_nodes = _layer_map(nodes, "facility")
+    collectors = _collectors(edges, nodes)
 
     as_ix: dict[str, dict[str, dict]] = {}
     as_fac: dict[str, dict[str, dict]] = {}
@@ -132,6 +161,8 @@ def build(conn, run_id: str) -> dict:
                 "name": info.get("name") or edge["target"],
                 "city": info.get("city"),
                 "country": info.get("country"),
+                "latitude": info.get("latitude"),
+                "longitude": info.get("longitude"),
                 "source_url": info.get("source_url"),
             }
 
@@ -163,7 +194,7 @@ def build(conn, run_id: str) -> dict:
             continue
         a_as, b_as = as_of.get(edge["source"]), as_of.get(edge["target"])
         geo_a, geo_b = geo_of.get(edge["source"]), geo_of.get(edge["target"])
-        handoff = {"ixps": [], "facilities": [], "geo": None}
+        handoff = {"ixps": [], "facilities": [], "bgp": [], "geo": None}
         if a_as and b_as and a_as != b_as:
             shared_ix = set(as_ix.get(a_as, {})) & set(as_ix.get(b_as, {}))
             suspects: dict[str, dict] = {
@@ -182,14 +213,56 @@ def build(conn, run_id: str) -> dict:
                                 suspects[key]["method"] = "shared+geo"
                             else:
                                 suspects[key] = {**fac, "method": "geo"}
+            bgp_here = []
+            for name, col in collectors.items():
+                near = False
+                if place and col["geo"]:
+                    gap = analysis.haversine_km(place, col["geo"])
+                    near = gap is not None and gap <= 500
+                path_hits = any(
+                    a_as[2:] in path.split() and b_as[2:] in path.split()
+                    for path in col["as_paths"]
+                )
+                if near or path_hits:
+                    bgp_here.append(
+                        {"collector": name, "near": near, "path_hits": path_hits,
+                         "as_paths": col["as_paths"][:3], "geo": col["geo"], "source_url": col["source_url"]}
+                    )
+            for key, fac in suspects.items():
+                supports: set[str] = set()
+                if fac["method"].startswith("shared"):
+                    supports.add("shared")
+                if "geo" in fac["method"]:
+                    supports.add("geo")
+                fac_geo = {"latitude": fac.get("latitude"), "longitude": fac.get("longitude")}
+                fac_country = (fac.get("country") or "").strip().casefold()
+                evidence = []
+                for name, col in collectors.items():
+                    if not col["geo"]:
+                        continue
+                    gap = analysis.haversine_km(fac_geo, col["geo"])
+                    if gap is not None and gap <= 100:
+                        supports.add("bgp")
+                        evidence.append(
+                            {"collector": name, "distance_km": round(gap),
+                             "as_paths": col["as_paths"][:2], "source_url": col["source_url"]}
+                        )
+                    elif fac_country and fac_country == (col["geo"].get("country") or "").strip().casefold():
+                        supports.add("bgp-country")
+                fac["supports"] = sorted(supports)
+                fac["bgp"] = evidence
+                fac["weak"] = not ({"shared", "bgp", "bgp-country"} & supports)
             handoff = {
                 "ixps": [as_ix[a_as][k] for k in sorted(shared_ix, key=lambda k: as_ix[a_as][k]["name"] or "")],
                 "facilities": [suspects[k] for k in sorted(suspects, key=lambda k: suspects[k]["name"] or "")],
+                "bgp": bgp_here,
                 "geo": {
                     "a": analysis.place_of(geo_a),
                     "b": analysis.place_of(geo_b),
                     "match": geo_match,
                     "distance_km": distance,
+                    "rtt_km_upper": analysis.rtt_km_upper(edge["min_rtt_ms"]),
+                    "plausible": analysis.geo_plausible(distance, edge["min_rtt_ms"]),
                 } if (geo_a or geo_b) else None,
             }
             if shared_ix:
@@ -250,6 +323,9 @@ def build(conn, run_id: str) -> dict:
                 "total_ixps": len(as_ix.get(asn, {})),
                 "total_facilities": len(as_fac.get(asn, {})),
                 "geo": attrs.get("geo"),
+                "rtt_ms": rtt_of.get(ip),
+                "rtt_km_upper": analysis.rtt_km_upper(rtt_of.get(ip)),
+                "long_haul": ip == long_haul,
                 "ttl_flows": entry["flows"] if entry else None,
                 "ttl_reply": entry["reply_ttl"] if entry else None,
                 "ttl_return_hops": entry["return_hops"] if entry else None,
@@ -309,6 +385,7 @@ def build(conn, run_id: str) -> dict:
         "containers": containers,
         "edges": out_edges,
         "sessions": _sessions(edges),
+        "collectors": sorted(collectors.values(), key=lambda item: item["collector"]),
         "facilities": _node_list(nodes, edges, "facility"),
         "ixps": _node_list(nodes, edges, "ix"),
     }

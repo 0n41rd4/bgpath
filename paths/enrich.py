@@ -24,6 +24,7 @@ import bgp
 import query
 
 import paths.alias as alias
+import paths.analysis as analysis
 import paths.store as store
 
 
@@ -125,6 +126,69 @@ def expand_geo(conn, run_id, graph, budget: int = 20) -> int:
     return located
 
 
+def _city(value) -> str:
+    return (value or "").strip().casefold()
+
+
+def expand_facility_geo(conn, run_id, graph, budget: int = 12) -> int:
+    cities = {
+        _city(data["geo"].get("city"))
+        for _node, data in graph.nodes(data=True)
+        if data.get("layer", "interface") == "interface" and data.get("geo")
+    }
+    cities.discard("")
+    memberships: dict[str, list[str]] = {}
+    for src, dst, data in graph.edges(data=True):
+        if data.get("layer") == "facility":
+            memberships.setdefault(dst, []).append(src)
+    shared = {key for key, sources in memberships.items() if len(set(sources)) >= 2}
+    candidates = [
+        key
+        for key, data in graph.nodes(data=True)
+        if data.get("layer") == "facility" and (key in shared or _city(data.get("city")) in cities)
+    ]
+    located = 0
+    for key in candidates[:budget]:
+        data = graph.nodes[key]
+        fac_id = data.get("fac_id")
+        if fac_id is None:
+            continue
+        info = query.facility_info(fac_id)
+        if not info:
+            continue
+        _set_node_attrs(
+            conn, graph, "facility", key,
+            {
+                "latitude": info.get("latitude"),
+                "longitude": info.get("longitude"),
+                "city": info.get("city") or data.get("city"),
+                "country": info.get("country") or data.get("country"),
+            },
+        )
+        located += 1
+    return located
+
+
+def expand_ix_prefixes(conn, run_id, graph, budget: int = 12) -> int:
+    memberships: dict[str, list[str]] = {}
+    for src, dst, data in graph.edges(data=True):
+        if data.get("layer") == "ix":
+            memberships.setdefault(dst, []).append(src)
+    shared = [key for key, sources in memberships.items() if len(set(sources)) >= 2]
+    fetched = 0
+    for key in shared[:budget]:
+        data = graph.nodes[key]
+        ixlan_id = data.get("ixlan_id")
+        if ixlan_id is None:
+            continue
+        prefixes = query.ix_prefixes(ixlan_id)
+        if not prefixes:
+            continue
+        _set_node_attrs(conn, graph, "ix", key, {"prefixes": prefixes})
+        fetched += 1
+    return fetched
+
+
 def expand_probes(conn, run_id, graph, asns: set[str]) -> int:
     counted = 0
     for asn in sorted(asns):
@@ -186,9 +250,9 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
                 if not name:
                     continue
                 key = f"FAC:{name}"
-                graph.add_node(key, layer="facility", name=name)
+                graph.add_node(key, layer="facility", name=name, city=facility.get("city"), country=facility.get("country"), fac_id=facility.get("fac_id"))
                 graph.add_edge(as_key(asn), key, layer="facility")
-                store.add_node(conn, "facility", key, {"name": name, "city": facility.get("city"), "country": facility.get("country"), "source_url": f"https://www.peeringdb.com/search?q={name}"})
+                store.add_node(conn, "facility", key, {"name": name, "city": facility.get("city"), "country": facility.get("country"), "fac_id": facility.get("fac_id"), "source_url": f"https://www.peeringdb.com/search?q={name}"})
                 store.add_edge(conn, run_id, "facility", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/search?q={name}"})
                 facilities_added += 1
         except Exception:
@@ -199,9 +263,10 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
                 if ix_id is None:
                     continue
                 key = f"IX:{ix_id}"
+                ixlan_id = ix.get("ixlan_id")
                 graph.add_node(key, layer="ix", name=ix.get("name"))
                 graph.add_edge(as_key(asn), key, layer="ix", ipaddr4=ix.get("ipaddr4"), ipaddr6=ix.get("ipaddr6"))
-                store.add_node(conn, "ix", key, {"name": ix.get("name"), "ix_id": ix_id, "source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
+                store.add_node(conn, "ix", key, {"name": ix.get("name"), "ix_id": ix_id, "ixlan_id": ixlan_id, "source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
                 store.add_edge(conn, run_id, "ix", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/ix/{ix_id}", "ipaddr4": ix.get("ipaddr4"), "ipaddr6": ix.get("ipaddr6")})
                 ix_added += 1
         except Exception:
@@ -312,6 +377,8 @@ def expand(
     session_stats = expand_sessions(conn, run_id, graph) if sessions else {"prefix": None, "sessions": 0, "collectors": 0}
     alias_stats = expand_aliases(conn, run_id, graph) if aliases else {"machines": 0, "clustered": 0}
     located = expand_geo(conn, run_id, graph, budget) if geo else 0
+    facility_geo = expand_facility_geo(conn, run_id, graph) if geo else 0
+    ix_prefixes = expand_ix_prefixes(conn, run_id, graph) if peeringdb else 0
     probed = expand_probes(conn, run_id, graph, asns) if probes else 0
     aliased = mark_aliasing(conn, run_id, graph)
     store.commit(conn)
@@ -323,6 +390,8 @@ def expand(
         "asns": sorted(asns),
         "named": named,
         "located": located,
+        "facility_geo": facility_geo,
+        "ix_prefixes": ix_prefixes,
         "probed": probed,
         "sessions": session_stats,
         "machines": alias_stats["machines"],

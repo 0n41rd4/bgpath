@@ -112,7 +112,7 @@ def peeringdb_netfac(body: str) -> dict:
     payload = _obj(body)
     data = payload.get("data") or []
     facilities = [
-        {"name": item.get("name"), "city": item.get("city"), "country": item.get("country")}
+        {"name": item.get("name"), "city": item.get("city"), "country": item.get("country"), "fac_id": item.get("fac_id")}
         for item in data
         if isinstance(item, dict)
     ]
@@ -126,6 +126,7 @@ def peeringdb_netixlan(body: str) -> dict:
         {
             "name": item.get("name"),
             "ix_id": item.get("ix_id"),
+            "ixlan_id": item.get("ixlan_id"),
             "ipaddr4": item.get("ipaddr4"),
             "ipaddr6": item.get("ipaddr6"),
         }
@@ -133,6 +134,31 @@ def peeringdb_netixlan(body: str) -> dict:
         if isinstance(item, dict)
     ]
     return {"ix": ix}
+
+
+def peeringdb_fac(body: str) -> dict:
+    payload = _obj(body)
+    data = payload.get("data") or []
+    first = data[0] if isinstance(data, list) and data else {}
+    return {
+        "fac_id": first.get("id"),
+        "name": first.get("name"),
+        "city": first.get("city"),
+        "country": first.get("country"),
+        "latitude": first.get("latitude"),
+        "longitude": first.get("longitude"),
+    }
+
+
+def peeringdb_ixpfx(body: str) -> dict:
+    payload = _obj(body)
+    data = payload.get("data") or []
+    prefixes = [
+        {"prefix": item.get("prefix"), "protocol": item.get("protocol"), "ixlan_id": item.get("ixlan_id")}
+        for item in data
+        if isinstance(item, dict)
+    ]
+    return {"prefixes": prefixes}
 
 
 def crtsh(body: str) -> dict:

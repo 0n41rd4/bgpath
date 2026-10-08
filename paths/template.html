@@ -147,6 +147,7 @@ function draw() {
       rect.setAttribute("stroke-dasharray", h.ttl_confidence === "low" ? "3 2" : "5 3");
       rect.setAttribute("stroke-width", "2");
     }
+    if (h.long_haul) { rect.setAttribute("stroke", "#f8fafc"); rect.setAttribute("stroke-width", "2.5"); rect.removeAttribute("stroke-dasharray"); }
     g.appendChild(rect);
     const t = el("text", {x:8, y:19});
     t.textContent = (h.ttl!=null ? h.ttl+"  " : "") + h.id;
@@ -181,6 +182,8 @@ function showHop(h) {
   panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as], ["as name", h.as_name],
                           ["aliased asns", (h.aliased_asns||[]).join(", ")], ["machine", h.machine],
                           ["location", h.geo ? [h.geo.city, h.geo.country].filter(Boolean).join(", ") + "  (" + h.geo.source + ")" : null],
+                          ["rtt_ms", h.rtt_ms], ["rtt bound", h.rtt_km_upper!=null ? "≤ " + Math.round(h.rtt_km_upper) + " km" : null],
+                          ["long haul", h.long_haul ? "yes · largest rtt" : null],
                           ["at IXP", h.ix ? h.ix.name : null],
                           ["IXPs (AS)", h.total_ixps ? h.relevant_ixps.length + " suspected / " + h.total_ixps : null],
                           ["facilities (AS)", h.total_facilities ? h.relevant_facilities.length + " suspected / " + h.total_facilities : null]]));
@@ -199,6 +202,10 @@ function showHop(h) {
   }
 }
 function fmtPlace(p) { return p && (p.city || p.country) ? [p.city, p.country].filter(Boolean).join(", ") : "?"; }
+function facLabel(f) {
+  const sup = (f.supports && f.supports.length) ? f.supports.join("+") : (f.method || "");
+  return f.name + (f.city ? " · " + f.city : "") + (sup ? "  [" + sup + "]" : "") + (f.weak ? "  ⚠ weak" : "");
+}
 function showEdge(e) {
   panel.textContent = "";
   panel.appendChild(title("TRAVERSAL EDGE"));
@@ -206,11 +213,18 @@ function showEdge(e) {
                           ["to", e.target + (e.to_as ? "  " + e.to_as : "")],
                           ["ttl", e.ttl], ["flows", e.count], ["min_rtt_ms", e.min_rtt_ms],
                           ["gap", e.gap ? "yes" : "no"]]));
-  const hand = e.handoff || {ixps:[], facilities:[], geo:null};
+  const hand = e.handoff || {ixps:[], facilities:[], bgp:[], geo:null};
   if (hand.geo) {
     panel.appendChild(title("endpoint locations"));
     panel.appendChild(rows([["from", fmtPlace(hand.geo.a)], ["to", fmtPlace(hand.geo.b)],
-                            ["match", hand.geo.match ? ("yes" + (hand.geo.distance_km!=null ? " · " + Math.round(hand.geo.distance_km) + " km" : "")) : "no"]]));
+                            ["match", hand.geo.match ? ("yes" + (hand.geo.distance_km!=null ? " · " + Math.round(hand.geo.distance_km) + " km" : "")) : "no"],
+                            ["rtt bound", hand.geo.rtt_km_upper!=null ? "≤ " + Math.round(hand.geo.rtt_km_upper) + " km" : null],
+                            ["geo plausible", hand.geo.plausible==null ? null : (hand.geo.plausible ? "yes" : "no · geolocation exceeds rtt")]]));
+  }
+  if (hand.bgp && hand.bgp.length) {
+    panel.appendChild(title("BGP advertisements · prefix seen"));
+    for (const c of hand.bgp)
+      panel.appendChild(item(c.collector + (c.near ? " · near handoff" : "") + (c.path_hits ? " · as-path hits" : "") + "  [" + (c.as_paths||[]).join(" | ") + "]", c.source_url));
   }
   panel.appendChild(title("suspected handoff"));
   if (!hand.ixps.length && !hand.facilities.length) {
@@ -219,7 +233,11 @@ function showEdge(e) {
     panel.appendChild(rows([["", note]]));
   }
   for (const x of hand.ixps) panel.appendChild(item("IXP · " + x.name, x.source_url));
-  for (const f of hand.facilities) panel.appendChild(item("facility · " + f.name + (f.city ? " · " + f.city : "") + (f.method ? "  [" + f.method + "]" : ""), f.source_url));
+  for (const f of hand.facilities) {
+    panel.appendChild(item(facLabel(f), f.source_url));
+    if (f.bgp && f.bgp.length)
+      for (const ev of f.bgp) panel.appendChild(item("  bgp · " + ev.collector + " (" + ev.distance_km + " km)  [" + (ev.as_paths||[]).join(" | ") + "]", ev.source_url));
+  }
 }
 function showAs(c) {
   panel.textContent = "";
@@ -235,7 +253,11 @@ function showAs(c) {
   for (const x of ixps) panel.appendChild(item(x.name, x.source_url));
   panel.appendChild(title("suspected facilities · " + facs.length + " / " + c.info.total_facilities));
   if (!facs.length) panel.appendChild(rows([["", "no shared facility with scanned neighbours"]]));
-  for (const f of facs) panel.appendChild(item(f.name + (f.city ? " · " + f.city : ""), f.source_url));
+  for (const f of facs) {
+    panel.appendChild(item(facLabel(f), f.source_url));
+    if (f.bgp && f.bgp.length)
+      for (const ev of f.bgp) panel.appendChild(item("  bgp · " + ev.collector + " (" + ev.distance_km + " km)", ev.source_url));
+  }
 }
 
 function summary() {
@@ -252,10 +274,15 @@ function summary() {
   panel.appendChild(title("BGP sessions · " + DATA.sessions.length));
   for (const s of DATA.sessions.slice(0, 40))
     panel.appendChild(item(`${s.speaker} → ${s.collector}  [${s.as_path}]`, s.source_url));
+  panel.appendChild(title("BGP advertisements · " + (DATA.collectors||[]).length + " collectors"));
+  for (const c of (DATA.collectors||[]))
+    panel.appendChild(item(c.collector + (c.geo && c.geo.country ? " · " + c.geo.country : "") + "  [" + (c.as_paths||[]).slice(0,2).join(" | ") + "]", c.source_url));
   panel.appendChild(title("facilities · " + DATA.facilities.length));
-  for (const f of DATA.facilities) panel.appendChild(item(f.name, f.source_url));
+  for (const f of DATA.facilities.slice(0, 60)) panel.appendChild(item(f.name, f.source_url));
+  if (DATA.facilities.length > 60) panel.appendChild(item("+" + (DATA.facilities.length - 60) + " more", null));
   panel.appendChild(title("IXPs · " + DATA.ixps.length));
-  for (const x of DATA.ixps) panel.appendChild(item(x.name, x.source_url));
+  for (const x of DATA.ixps.slice(0, 60)) panel.appendChild(item(x.name, x.source_url));
+  if (DATA.ixps.length > 60) panel.appendChild(item("+" + (DATA.ixps.length - 60) + " more", null));
 }
 
 function apply() { viewport.setAttribute("transform", `translate(${tx},${ty}) scale(${scale})`); }

@@ -75,6 +75,18 @@ def ttl_confidence(entry: dict | None, gap_before: bool) -> tuple[str, list[str]
     return "medium", reasons
 
 
+def rtt_km_upper(rtt_ms: float | None) -> float | None:
+    if rtt_ms is None:
+        return None
+    return rtt_ms * 100.0
+
+
+def geo_plausible(distance_km: float | None, rtt_ms: float | None, slack: float = 1.5) -> bool | None:
+    if distance_km is None or rtt_ms is None:
+        return None
+    return distance_km <= rtt_km_upper(rtt_ms) * slack
+
+
 def haversine_km(a: dict, b: dict) -> float | None:
     lat1, lon1, lat2, lon2 = a.get("latitude"), a.get("longitude"), b.get("latitude"), b.get("longitude")
     if None in (lat1, lon1, lat2, lon2):

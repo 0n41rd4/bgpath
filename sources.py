@@ -397,6 +397,14 @@ def _peeringdb_netixlan_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("ix", "ixlan", item) for item in parsed["ix"]]
 
 
+def _peeringdb_fac_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("facility", "location", parsed)]
+
+
+def _peeringdb_ixpfx_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("ix", "prefix", item) for item in parsed["prefixes"]]
+
+
 def _crtsh_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("names", "certificate", cert) for cert in parsed["certificates"]]
 
@@ -650,6 +658,28 @@ SOURCES: list[dict] = [
         "url": lambda ctx: f"https://www.peeringdb.com/api/netixlan?net_id={ctx['net_id']}",
         "parse": parsers.peeringdb_netixlan,
         "observations": _peeringdb_netixlan_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "peeringdb.fac",
+        "upstream": "PeeringDB",
+        "evidence_class": "reported",
+        "needs": ["fac_id"],
+        "delay": 1.2,
+        "url": lambda ctx: f"https://www.peeringdb.com/api/fac?id={ctx['fac_id']}",
+        "parse": parsers.peeringdb_fac,
+        "observations": _peeringdb_fac_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "peeringdb.ixpfx",
+        "upstream": "PeeringDB",
+        "evidence_class": "reported",
+        "needs": ["ixlan_id"],
+        "delay": 1.2,
+        "url": lambda ctx: f"https://www.peeringdb.com/api/ixpfx?ixlan_id={ctx['ixlan_id']}",
+        "parse": parsers.peeringdb_ixpfx,
+        "observations": _peeringdb_ixpfx_obs,
         "provides": lambda parsed: {},
     },
     {
