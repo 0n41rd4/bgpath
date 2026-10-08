@@ -7,7 +7,7 @@ the full brief.
 
 Phase 1 (fetch + raw store + observations), phase 2 (comparison + HTML report),
 phase 3 (more sources), phase 4 (entity normalization) and phase 5 (cross-IP
-analysis) are implemented. 16 always-on sources + 5 optional query an IP in
+analysis) are implemented. 19 always-on sources + 5 optional query an IP in
 dependency waves; raw responses land in the `fetches` table, normalized claims
 in the `observations` table.
 
@@ -128,6 +128,30 @@ Design rules the report follows:
   derived from the data; everything is sorted; `schema_version` is present.
 
 
+
+## Sources
+
+Always-on, no account or key. Grouped by backend so independent vantage points
+stay visible — the same question answered from different infrastructure is what
+makes a disagreement meaningful:
+
+| Source | Backend / vantage | Evidence |
+|---|---|---|
+| `ripestat.network-info`, `ripestat.as-overview`, `ripestat.asn-neighbours` | RIPE NCC (RIS BGP) | observed-passive |
+| `ripestat.geoloc` | RIPE NCC (embeds MaxMind/IP2Location) | reported |
+| `ipmap` | RIPE NCC (Atlas latency engine + rDNS) | inferred |
+| `routeviews.prefix` | RouteViews collectors (U of Oregon + 9 IXes) + Routinator/rpki-client | observed-passive |
+| `cymru.origin` | Team Cymru BGP (via DNS) | observed-passive |
+| `irr.origin` | RADb / IRR route objects (registered intent) | reported |
+| `rdap` | RIR RDAP | reported |
+| `peeringdb.net`, `peeringdb.netfac`, `peeringdb.netixlan` | PeeringDB directory | reported |
+| `ip.guide` | ip.guide | reported |
+| `ipwho.is` | ipwho.is | reported |
+| `rdns.ptr` | DNS PTR | reported |
+| `internetdb` | Shodan (keyless slice) | observed-passive |
+| `crtsh` | Certificate Transparency logs | reported |
+| `globalping.ping` | Globalping community probes | observed-active |
+| `atlas.ping` | RIPE Atlas probes | observed-active |
 
 ## Optional sources
 
