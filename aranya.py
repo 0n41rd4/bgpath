@@ -169,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--normalize", action="store_true", help="canonicalize values before comparing (with --view)")
     parser.add_argument("--entities", action="store_true", help="resolve the IP's ownership entity")
     parser.add_argument("--report", action="store_true", help="cross-IP overview + agreement profile")
+    parser.add_argument("--stats", action="store_true", help="cross-IP analysis over the store")
     parser.add_argument("--export", metavar="FILE", help="write the JSON contract (no fetch)")
     parser.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     parser.add_argument("--ips", help="comma-separated IP filter for --export/--html")
@@ -205,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
         ips = views.ips(conn)
         print("\n".join(render.overview_view(conn, ips, color)))
         print("\n".join(render.profile_view(conn, ips, color)))
+        conn.close()
+        return 0
+
+    if args.stats:
+        ips = [args.ip] if args.ip else None
+        print("\n".join(render.stats_view(conn, ips, color)))
         conn.close()
         return 0
 

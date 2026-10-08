@@ -8,6 +8,7 @@ Pure presentation: consumes views.py (read-only rows) and aggregate.py
 from __future__ import annotations
 
 import aggregate
+import analyze
 import entities
 import views
 
@@ -151,4 +152,38 @@ def entities_view(conn, ip: str, color: bool = True) -> list[str]:
             lines.append(f"    [{mark}] {canonical:<24} <- {', '.join(variants)}")
     if entity["unlinked"]:
         lines.append(f"  unlinked names: {', '.join(entity['unlinked'])}")
+    return lines
+
+
+def stats_view(conn, ips: list[str] | None = None, color: bool = True) -> list[str]:
+    data = analyze.stats(conn, ips)
+    paint = Paint(color)
+    lines = [f"analysis  ·  {len(data['ips'])} ip(s)  ·  {data['claims']} claim-cells", ""]
+    lines.append("verdicts:")
+    for verdict in ("disagree", "spread", "agree", "single"):
+        count = data["verdicts"].get(verdict, 0)
+        if count:
+            lines.append(f"  {paint(f'{verdict:<10}', VERDICT_COLOR[verdict])} {count}")
+    lines.append("")
+    lines.append("most contested claims:")
+    lines.append(f"  {'topic.key':<26} {'cells':>5} {'contested':>9} {'rate':>6}")
+    for row in data["disagreements"][:15]:
+        if not row["contested"]:
+            continue
+        lines.append(
+            f"  {row['topic'] + '.' + row['key']:<26} {row['cells']:>5} {row['contested']:>9} "
+            f"{row['rate']:>6.0%}"
+        )
+    lines.append("")
+    lines.append("anycast-like (one source reports many location claims):")
+    for row in data["anycast"][:10]:
+        lines.append(f"  {row['ip']:<16} {row['source']:<22} {row['values']} values")
+    lines.append("")
+    lines.append("sources (conformity, not accuracy):")
+    lines.append(f"  {'source':<24} {'cells':>5} {'agree':>6} {'dissent':>7} {'multi':>6} {'single':>6}")
+    for row in data["sources"]:
+        lines.append(
+            f"  {row['source']:<24} {row['cells']:>5} {row['agree']:>6} {row['dissent']:>7} "
+            f"{row['multi']:>6} {row['single']:>6}"
+        )
     return lines
