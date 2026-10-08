@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ipaddress
 
+import cache
 import parsers
 import sources
 
@@ -22,9 +23,14 @@ ROUTEVIEWS = "https://api.routeviews.org"
 
 
 def _get(url: str) -> str:
+    key = cache.make("http", url)
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
     status, body, error = sources.http_get(url)
     if error:
         raise RuntimeError(error)
+    cache.put(key, body)
     return body
 
 

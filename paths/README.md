@@ -70,6 +70,25 @@ alias/ECMP/gap), persistence (`store.py`), and the graph-mutation glue
 building (installed in the venv); without it the probe/store/enrich tests still
 run.
 
+## Testing & rate limits
+
+Repeated runs would hammer RIPEstat / PeeringDB / RouteViews, so source-analysis
+responses are cached on disk: `PATHS_CACHE` (dir, default
+`~/.cache/aranya/paths`; `off` to disable) and `PATHS_CACHE_TTL` (seconds,
+default 86400). Enrichment parts switch off per run:
+
+```sh
+--no-sessions    # skip RouteViews BGP sessions
+--no-peeringdb   # skip PeeringDB facilities/IXPs
+--no-neighbours  # skip RIPEstat AS neighbours
+--no-alias       # skip rDNS alias resolution
+--no-cache       # bypass the cache for this run
+```
+
+or with env vars `PATHS_NO_SESSIONS` / `PATHS_NO_PEERINGDB` / `PATHS_NO_NEIGHBOURS`
+/ `PATHS_NO_ALIAS` = `1`. A 4-flow scamper trace runs with a 1s wait and 100 pps,
+which cuts it from ~65s to ~10s; enrichment from cache is a few seconds.
+
 ## Privileged tools
 
 | Tool | Needs | Status |

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 
 import paths.enrich as enrich
@@ -24,6 +25,8 @@ def _run_id(target: str) -> str:
 
 
 def cmd_trace(args) -> int:
+    if args.no_cache:
+        os.environ["PATHS_CACHE"] = "off"
     if not probe.available(args.tool):
         print(f"{probe.TOOLS.get(args.tool, args.tool)} not found on PATH")
         return 1
@@ -69,7 +72,16 @@ def cmd_trace(args) -> int:
             print(f"    ECMP {node} -> {', '.join(nexts)}")
 
     if args.enrich:
-        stats = enrich.expand(conn, run_id, interface, budget=args.budget)
+        stats = enrich.expand(
+            conn,
+            run_id,
+            interface,
+            budget=args.budget,
+            sessions=not args.no_sessions,
+            peeringdb=not args.no_peeringdb,
+            neighbours=not args.no_neighbours,
+            aliases=not args.no_alias,
+        )
         print(
             f"  enriched: {stats['origin_edges']} origin edges, {stats['as_edges']} AS edges, "
             f"{stats['facilities']} facilities, {stats['ixps']} IXPs, {len(stats['asns'])} ASes"
@@ -164,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     trace.add_argument("--maxttl", type=int, default=20)
     trace.add_argument("--enrich", action="store_true", help="expand via BGP/PeeringDB sources")
     trace.add_argument("--budget", type=int, default=12, help="max interfaces to enrich")
+    trace.add_argument("--no-sessions", action="store_true", help="skip RouteViews BGP sessions")
+    trace.add_argument("--no-peeringdb", action="store_true", help="skip PeeringDB facilities/IXPs")
+    trace.add_argument("--no-neighbours", action="store_true", help="skip RIPEstat AS neighbours")
+    trace.add_argument("--no-alias", action="store_true", help="skip rDNS alias resolution")
+    trace.add_argument("--no-cache", action="store_true", help="bypass the source-analysis disk cache")
     trace.set_defaults(func=cmd_trace)
 
     show = sub.add_parser("show", help="list runs and graph sizes")

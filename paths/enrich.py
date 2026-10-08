@@ -16,6 +16,8 @@ IP aliasing (one IP used by more than one AS) is recorded as a node attribute.
 
 from __future__ import annotations
 
+import ipaddress
+import os
 from collections import defaultdict
 
 import bgp
@@ -23,6 +25,18 @@ import query
 
 import paths.alias as alias
 import paths.store as store
+
+
+def _env_off(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("1", "true", "on", "yes")
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 def as_key(asn) -> str:
@@ -34,8 +48,16 @@ def collector_key(name: str) -> str:
 
 
 def target_ip(graph) -> str | None:
-    sinks = [node for node, degree in graph.out_degree() if degree == 0]
-    return sinks[0] if sinks else None
+    best, best_ttl = None, -1
+    for _src, dst, data in graph.edges(data=True):
+        if data.get("layer") in (None, "interface") and _is_ip(dst):
+            ttl = data.get("ttl")
+            if ttl is not None and ttl > best_ttl:
+                best, best_ttl = dst, ttl
+    if best:
+        return best
+    ips = [node for node in graph.nodes if _is_ip(node)]
+    return ips[-1] if ips else None
 
 
 def target_prefix(graph) -> str | None:
@@ -178,7 +200,15 @@ def expand_sessions(conn, run_id, graph, cap: int = 40) -> dict:
     return {"prefix": prefix, "sessions": sessions, "collectors": len(collectors)}
 
 
+def _cached_rdns(ip: str) -> str | None:
+    try:
+        return (query.fetch_parsed("rdns.ptr", ip) or {}).get("hostname")
+    except Exception:
+        return None
+
+
 def expand_aliases(conn, run_id, graph, resolver=None) -> dict:
+    resolver = resolver or _cached_rdns
     hops: set[str] = set()
     for src, dst, data in graph.edges(data=True):
         if data.get("layer") in (None, "interface"):
@@ -208,12 +238,27 @@ def mark_aliasing(conn, run_id, graph) -> dict[str, list[str]]:
     return aliased
 
 
-def expand(conn, run_id, graph, budget: int = 20, neighbours_cap: int = 40) -> dict:
+def expand(
+    conn,
+    run_id,
+    graph,
+    budget: int = 20,
+    neighbours_cap: int = 40,
+    sessions: bool = True,
+    peeringdb: bool = True,
+    neighbours: bool = True,
+    aliases: bool = True,
+) -> dict:
+    sessions = sessions and not _env_off("PATHS_NO_SESSIONS")
+    peeringdb = peeringdb and not _env_off("PATHS_NO_PEERINGDB")
+    neighbours = neighbours and not _env_off("PATHS_NO_NEIGHBOURS")
+    aliases = aliases and not _env_off("PATHS_NO_ALIAS")
+
     asns = expand_origins(conn, run_id, graph, budget)
-    as_edges = expand_neighbours(conn, run_id, graph, asns, neighbours_cap)
-    facilities_added, ix_added = expand_peeringdb(conn, run_id, graph, asns)
-    sessions = expand_sessions(conn, run_id, graph)
-    aliases = expand_aliases(conn, run_id, graph)
+    as_edges = expand_neighbours(conn, run_id, graph, asns, neighbours_cap) if neighbours else 0
+    facilities_added, ix_added = expand_peeringdb(conn, run_id, graph, asns) if peeringdb else (0, 0)
+    session_stats = expand_sessions(conn, run_id, graph) if sessions else {"prefix": None, "sessions": 0, "collectors": 0}
+    alias_stats = expand_aliases(conn, run_id, graph) if aliases else {"machines": 0, "clustered": 0}
     aliased = mark_aliasing(conn, run_id, graph)
     store.commit(conn)
     return {
@@ -222,8 +267,8 @@ def expand(conn, run_id, graph, budget: int = 20, neighbours_cap: int = 40) -> d
         "facilities": facilities_added,
         "ixps": ix_added,
         "asns": sorted(asns),
-        "sessions": sessions,
-        "machines": aliases["machines"],
-        "clustered": aliases["clustered"],
+        "sessions": session_stats,
+        "machines": alias_stats["machines"],
+        "clustered": alias_stats["clustered"],
         "aliased": aliased,
     }

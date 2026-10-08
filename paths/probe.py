@@ -57,11 +57,11 @@ def capture_scamper(target: str, flows: int = 4, max_ttl: int = 20, timeout: int
     command = _scamper_command()
     args: list[str] = []
     for index in range(flows):
-        args += ["-I", f"trace -P udp-paris -q 2 -m {max_ttl} -s {40000 + index} {target}"]
+        args += ["-I", f"trace -P udp-paris -q 2 -w 1 -m {max_ttl} -s {40000 + index} {target}"]
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "scamper.json")
         subprocess.run(
-            command + ["-O", "json", "-o", out] + args,
+            command + ["-p", "100", "-w", "1", "-O", "json", "-o", out] + args,
             capture_output=True,
             text=True,
             timeout=timeout,

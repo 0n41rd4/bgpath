@@ -7,6 +7,9 @@ these instead of talking to the network itself.
 
 from __future__ import annotations
 
+import json
+
+import cache
 import observe
 import sources
 
@@ -18,7 +21,12 @@ def _adapter(adapter_id: str) -> dict:
     raise KeyError(adapter_id)
 
 
-def fetch_parsed(adapter_id: str, ip: str = "", context: dict | None = None) -> dict:
+def fetch_parsed(adapter_id: str, ip: str = "", context: dict | None = None, refresh: bool = False) -> dict:
+    key = cache.make("query", adapter_id, ip, json.dumps(context or {}, sort_keys=True))
+    if not refresh:
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
     adapter = _adapter(adapter_id)
     ctx = {"ip": ip, **(context or {})}
     url = adapter["url"](ctx)
@@ -29,6 +37,7 @@ def fetch_parsed(adapter_id: str, ip: str = "", context: dict | None = None) -> 
     if error:
         raise RuntimeError(f"{adapter_id}: {error}")
     parsed, _ = observe.observe(adapter, ip, body)
+    cache.put(key, parsed)
     return parsed
 
 
