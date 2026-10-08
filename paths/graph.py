@@ -31,21 +31,22 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
         for hop in answered:
             graph.add_node(hop["src_ip"])
         for previous, current in zip(answered, answered[1:]):
-            gap = bool(
-                previous["ttl"] is not None
-                and current["ttl"] is not None
-                and current["ttl"] - previous["ttl"] > 1
+            span = (
+                current["ttl"] - previous["ttl"]
+                if previous["ttl"] is not None and current["ttl"] is not None
+                else 1
             )
-            _add_edge(graph, previous["src_ip"], current["src_ip"], flow_id, current, gap)
+            _add_edge(graph, previous["src_ip"], current["src_ip"], flow_id, current, span)
     return graph
 
 
-def _add_edge(graph: nx.DiGraph, src: str, dst: str, flow_id: int, hop: dict, gap: bool) -> None:
+def _add_edge(graph: nx.DiGraph, src: str, dst: str, flow_id: int, hop: dict, span: int) -> None:
     if graph.has_edge(src, dst):
         data = graph[src][dst]
         data["count"] += 1
         data["flows"].add(flow_id)
-        data["gap"] = data["gap"] or gap
+        data["span"] = min(data["span"], span)
+        data["gap"] = data["span"] > 1
         if hop["rtt_ms"] is not None:
             data["min_rtt_ms"] = min(data["min_rtt_ms"], hop["rtt_ms"]) if data["min_rtt_ms"] is not None else hop["rtt_ms"]
         if hop["ttl"] is not None:
@@ -56,14 +57,24 @@ def _add_edge(graph: nx.DiGraph, src: str, dst: str, flow_id: int, hop: dict, ga
             dst,
             count=1,
             flows={flow_id},
-            gap=gap,
+            span=span,
+            gap=span > 1,
             min_rtt_ms=hop["rtt_ms"],
             ttl=hop["ttl"],
         )
 
 
 def ecmp_nodes(graph: nx.DiGraph) -> list[str]:
-    return sorted(node for node, degree in graph.out_degree() if degree > 1)
+    result: list[str] = []
+    for node in graph.nodes:
+        nexts = {
+            dst
+            for _, dst, data in graph.out_edges(node, data=True)
+            if not data.get("gap")
+        }
+        if len(nexts) > 1:
+            result.append(node)
+    return sorted(result)
 
 
 def persist(conn, run_id: str, graph: nx.DiGraph, layer: str = "interface") -> None:
@@ -78,7 +89,7 @@ def persist(conn, run_id: str, graph: nx.DiGraph, layer: str = "interface") -> N
             dst,
             ttl=data.get("ttl"),
             rtt_ms=data.get("min_rtt_ms"),
-            attrs={"flows": sorted(data.get("flows") or []), "gap": data.get("gap"), "count": data.get("count")},
+            attrs={"flows": sorted(data.get("flows") or []), "gap": data.get("gap"), "span": data.get("span"), "count": data.get("count")},
         )
     store.commit(conn)
 
