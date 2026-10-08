@@ -20,10 +20,36 @@ except Exception:
     HAVE_NX = False
 
 FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "dublin_8.8.8.8.json"
+SCAMPER_FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "scamper_8.8.8.8.json"
 
 
 def hops():
     return probe.parse_dublin(json.loads(FIXTURE.read_text()))
+
+
+def scamper_hops():
+    traces = [json.loads(line) for line in SCAMPER_FIXTURE.read_text().splitlines() if line.strip()]
+    return probe.parse_scamper([obj for obj in traces if obj.get("type") == "trace"])
+
+
+class ScamperTest(unittest.TestCase):
+    def test_flows(self):
+        self.assertEqual(sorted({hop["flow_id"] for hop in scamper_hops()}), [40001, 40002])
+
+    def test_fields(self):
+        hop = next(h for h in scamper_hops() if h["ttl"] == 1)
+        self.assertEqual(hop["src_ip"], "192.168.1.254")
+        self.assertEqual((hop["icmp_type"], hop["icmp_code"]), (11, 0))
+        self.assertIsNotNone(hop["rtt_ms"])
+
+    def test_last_hop(self):
+        hop = next(h for h in scamper_hops() if h["is_last"])
+        self.assertEqual(hop["src_ip"], "8.8.8.8")
+        self.assertEqual((hop["icmp_type"], hop["icmp_code"]), (3, 3))
+
+    def test_gap_preserved(self):
+        ttls = sorted(h["ttl"] for h in scamper_hops() if h["flow_id"] == 40001)
+        self.assertIn(2, [b - a for a, b in zip(ttls, ttls[1:])])
 
 
 class ProbeTest(unittest.TestCase):

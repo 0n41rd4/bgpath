@@ -23,10 +23,16 @@ def _run_id(target: str) -> str:
 
 
 def cmd_trace(args) -> int:
-    if not probe.available():
-        print("dublin-traceroute not found on PATH")
+    if not probe.available(args.tool):
+        print(f"{probe.TOOLS.get(args.tool, args.tool)} not found on PATH")
         return 1
-    started, hops, meta = probe.run(args.target, flows=args.flows, max_ttl=args.maxttl)
+    try:
+        started, hops, meta = probe.run(
+            args.target, flows=args.flows, max_ttl=args.maxttl, tool=args.tool
+        )
+    except Exception as exc:
+        print(f"capture failed: {exc}")
+        return 1
     if not hops:
         print("no hops captured")
         return 1
@@ -40,7 +46,7 @@ def cmd_trace(args) -> int:
             "port": 33434,
             "proto": "udp",
             "src_ip": meta.get("vantage"),
-            "tool": probe.TOOL,
+            "tool": meta.get("tool"),
             "started_at": started,
             "meta": meta,
         },
@@ -122,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
 
     trace = sub.add_parser("trace", help="capture a trace and build the graph")
     trace.add_argument("target")
+    trace.add_argument("--tool", choices=["scamper", "dublin"], default="scamper")
     trace.add_argument("--flows", type=int, default=4)
     trace.add_argument("--maxttl", type=int, default=20)
     trace.add_argument("--enrich", action="store_true", help="expand via BGP/PeeringDB sources")

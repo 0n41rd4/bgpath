@@ -1,9 +1,14 @@
-"""Active path discovery.
+"""Active path discovery backends.
 
-First backend is dublin-traceroute: it probes N flow IDs (ECMP-aware) and emits
-JSON with per-flow hop lists including ICMP type/code, IP-ID, NAT id and MPLS
-labels. scamper (Paris/MDA) is the intended richer backend but its privilege
-separation needs root; it will plug in here behind the same interface.
+Two backends behind one interface:
+
+- scamper (default): Paris traceroute, one flow per source port, emits JSON
+  lines with correct ICMP type/code, IP-ID and MPLS. Needs root because of its
+  privilege separation; if a passwordless `sudo -n scamper` is available it is
+  used automatically, otherwise it falls back to a direct call.
+- dublin-traceroute: ECMP-aware, runs unprivileged via its file capability.
+
+Both feed the same hop shape, so the graph layer does not care which ran.
 """
 
 from __future__ import annotations
@@ -15,19 +20,91 @@ import subprocess
 import tempfile
 import time
 
-TOOL = "dublin-traceroute"
+DUBLIN = "dublin-traceroute"
+SCAMPER = "scamper"
+TOOLS = {"scamper": SCAMPER, "dublin": DUBLIN}
+
+_sudo_cache: list[str] | None = None
 
 
-def available() -> bool:
-    return shutil.which(TOOL) is not None
+def available(tool: str = SCAMPER) -> bool:
+    return shutil.which(TOOLS.get(tool, tool)) is not None
 
 
-def capture(target: str, flows: int = 3, max_ttl: int = 20, timeout: int = 120) -> dict:
-    if not available():
-        raise RuntimeError(f"{TOOL} not found on PATH")
+def _sudo_allows(command: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "-l", command], capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _scamper_command() -> list[str]:
+    global _sudo_cache
+    if _sudo_cache is None:
+        if shutil.which(SCAMPER) is None:
+            raise RuntimeError(f"{SCAMPER} not found on PATH")
+        if shutil.which("sudo") is not None and _sudo_allows(SCAMPER):
+            _sudo_cache = ["sudo", "-n", SCAMPER]
+        else:
+            _sudo_cache = [SCAMPER]
+    return _sudo_cache
+
+
+def capture_scamper(target: str, flows: int = 4, max_ttl: int = 20, timeout: int = 180) -> list[dict]:
+    command = _scamper_command()
+    args: list[str] = []
+    for index in range(flows):
+        args += ["-I", f"trace -P udp-paris -q 2 -m {max_ttl} -s {40000 + index} {target}"]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "scamper.json")
+        subprocess.run(
+            command + ["-O", "json", "-o", out] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        )
+        with open(out) as handle:
+            objects = [json.loads(line) for line in handle if line.strip()]
+    return [obj for obj in objects if obj.get("type") == "trace"]
+
+
+def parse_scamper(traces: list[dict]) -> list[dict]:
+    hops: list[dict] = []
+    for trace in traces:
+        flow_id = trace.get("sport")
+        dst = trace.get("dst")
+        for hop in trace.get("hops") or []:
+            hops.append(
+                {
+                    "flow_id": flow_id,
+                    "ttl": hop.get("probe_ttl"),
+                    "src_ip": hop.get("addr"),
+                    "probe_src": trace.get("src"),
+                    "rtt_ms": hop.get("rtt"),
+                    "icmp_type": hop.get("icmp_type"),
+                    "icmp_code": hop.get("icmp_code"),
+                    "reply_ttl": hop.get("reply_ttl"),
+                    "ip_id": hop.get("reply_ipid"),
+                    "nat_id": None,
+                    "mpls": hop.get("mpls") or [],
+                    "is_last": hop.get("addr") == dst,
+                    "name": None,
+                }
+            )
+    hops.sort(key=lambda hop: (hop["flow_id"] or 0, hop["ttl"] or 0))
+    return hops
+
+
+def capture_dublin(target: str, flows: int = 4, max_ttl: int = 20, timeout: int = 180) -> dict:
+    if not available("dublin"):
+        raise RuntimeError(f"{DUBLIN} not found on PATH")
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(
-            [TOOL, "-n", str(flows), "-T", str(max_ttl), target],
+            [DUBLIN, "-n", str(flows), "-T", str(max_ttl), target],
             cwd=tmp,
             capture_output=True,
             text=True,
@@ -36,7 +113,7 @@ def capture(target: str, flows: int = 3, max_ttl: int = 20, timeout: int = 120) 
         )
         out = os.path.join(tmp, "trace.json")
         if not os.path.exists(out):
-            raise RuntimeError(f"{TOOL} produced no trace.json")
+            raise RuntimeError(f"{DUBLIN} produced no trace.json")
         with open(out) as handle:
             return json.load(handle)
 
@@ -81,15 +158,24 @@ def parse_dublin(payload: dict) -> list[dict]:
     return hops
 
 
-def run(target: str, flows: int = 3, max_ttl: int = 20, timeout: int = 120) -> tuple[str, list[dict], dict]:
-    payload = capture(target, flows=flows, max_ttl=max_ttl, timeout=timeout)
-    hops = parse_dublin(payload)
+def run(
+    target: str,
+    flows: int = 4,
+    max_ttl: int = 20,
+    tool: str = "scamper",
+    timeout: int = 180,
+) -> tuple[str, list[dict], dict]:
+    if tool == "dublin":
+        hops = parse_dublin(capture_dublin(target, flows=flows, max_ttl=max_ttl, timeout=timeout))
+    else:
+        hops = parse_scamper(capture_scamper(target, flows=flows, max_ttl=max_ttl, timeout=timeout))
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     vantage = next((hop["probe_src"] for hop in hops if hop.get("probe_src")), None)
     meta = {
+        "tool": TOOLS.get(tool, tool),
         "flows": flows,
         "max_ttl": max_ttl,
-        "flow_ids": sorted({hop["flow_id"] for hop in hops}),
+        "flow_ids": sorted({hop["flow_id"] for hop in hops if hop["flow_id"] is not None}),
         "vantage": vantage,
     }
     return started, hops, meta
