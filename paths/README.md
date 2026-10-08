@@ -53,6 +53,30 @@ AS's PeeringDB IXPs and facilities are already fetched once (cached), so:
 All of this reuses the same cached PeeringDB responses, so the intersection and the
 port match cost nothing extra.
 
+## Analysis
+
+`paths/analysis.py` adds two derived, query-free analyses (rendered in the page):
+
+- **TTL trust.** The `ttl` in the graph is the probe TTL at which a hop answered —
+  an active-traceroute inference, per flow (scamper Paris / dublin). It is marked
+  `high` when an IP answers at one TTL across several flows with no preceding gap,
+  `medium` when only one flow saw it or a gap precedes it, and `low` when the same
+  IP answers at different TTLs across flows (path change or an alias). The page
+  draws medium/low hops with a dashed/red border and reports the ICMP reply TTL
+  (from the probe) as a cross-check. Traceroute is the right base tool here;
+  independent confirmation comes from RIPE Atlas / Globalping measurements from
+  other vantages, and middlebox-aware probing (Paris, tracebox) where needed.
+- **Geolocated handoff.** Both endpoint IPs of an inter-AS edge are geolocated with
+  the existing sources (MaxMind/DB-IP → ipwho.is → RIPEstat `geoloc`, cached). If
+  the two locations match (same city, or within ~300 km), the edge is flagged as a
+  local handoff, and any facility of either AS in that city is suspected — in
+  addition to the PeeringDB shared-facility intersection. Suspects carry their
+  method (`shared`, `geo`, or `shared+geo`).
+
+AS boxes show the AS **name** (PeeringDB / RIPEstat) and, when available, the
+number of **RIPE Atlas probes** in that AS by country (`atlas.probes`), i.e.
+evidence that the AS is present where we suspect it.
+
 ## Layers
 
 | Layer | Node | Edge | Source |
@@ -99,11 +123,13 @@ default 86400). Enrichment parts switch off per run:
 --no-peeringdb   # skip PeeringDB facilities/IXPs
 --no-neighbours  # skip RIPEstat AS neighbours
 --no-alias       # skip rDNS alias resolution
+--no-geo         # skip hop geolocation
+--no-probes      # skip RIPE Atlas probe counts
 --no-cache       # bypass the cache for this run
 ```
 
 or with env vars `PATHS_NO_SESSIONS` / `PATHS_NO_PEERINGDB` / `PATHS_NO_NEIGHBOURS`
-/ `PATHS_NO_ALIAS` = `1`. A 4-flow scamper trace runs with a 1s wait and 100 pps,
+/ `PATHS_NO_ALIAS` / `PATHS_NO_GEO` / `PATHS_NO_PROBES` = `1`. A 4-flow scamper trace runs with a 1s wait and 100 pps,
 which cuts it from ~65s to ~10s; enrichment from cache is a few seconds.
 
 ## Privileged tools

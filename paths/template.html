@@ -46,7 +46,7 @@
 <header>
   <h1>aranya · scan graph</h1>
   <span class="meta" id="runmeta"></span>
-  <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · click a hop, edge, IXP chip or AS box for detail &amp; source</span>
+  <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · dashed hop = weaker ttl · click a hop, edge, handoff chip or AS box for detail &amp; source</span>
 </header>
 <div id="wrap">
   <div id="canvas"><svg id="svg"><g id="viewport"></g></svg></div>
@@ -75,7 +75,10 @@ function draw() {
     const g = el("g", {class:"container"});
     if (c.kind === "as") {
       g.appendChild(el("rect", {class:"asbox", x:c.x, y:c.y, width:c.w, height:c.h, rx:10, stroke:colorFor(c.label)}));
-      const t = el("text", {class:"boxtitle", x:c.x+8, y:c.y+14}); t.textContent = c.label; g.appendChild(t);
+      const t = el("text", {class:"boxtitle", x:c.x+8, y:c.y+14});
+      const asName = c.info.name ? (c.info.name.length > 20 ? c.info.name.slice(0, 19) + "…" : c.info.name) : "";
+      t.textContent = c.label + (asName ? "  " + asName : "");
+      g.appendChild(t);
       const viaIx = c.info.ixps && c.info.ixps.length;
       if (viaIx) {
         const names = c.info.ixps.map(x => x.name).slice(0, 2);
@@ -138,12 +141,19 @@ function draw() {
   }
   for (const h of DATA.hops) {
     const g = el("g", {class:"hop", transform:`translate(${h.x},${h.y})`});
-    g.appendChild(el("rect", {width:W, height:H, fill:h.is_target ? "#f59e0b" : (h.as ? colorFor(h.as) : "#475569")}));
+    const rect = el("rect", {width:W, height:H, fill:h.is_target ? "#f59e0b" : (h.as ? colorFor(h.as) : "#475569")});
+    if (h.ttl_confidence && h.ttl_confidence !== "high") {
+      rect.setAttribute("stroke", h.ttl_confidence === "low" ? "#ef4444" : "#f59e0b");
+      rect.setAttribute("stroke-dasharray", h.ttl_confidence === "low" ? "3 2" : "5 3");
+      rect.setAttribute("stroke-width", "2");
+    }
+    g.appendChild(rect);
     const t = el("text", {x:8, y:19});
     t.textContent = (h.ttl!=null ? h.ttl+"  " : "") + h.id;
     g.appendChild(t);
     if (h.ix) g.appendChild(el("circle", {class:"ixdot", cx:W-8, cy:8, r:4}));
-    const hopTip = "hop · " + h.id + (h.as ? " · " + h.as : "") + (h.ix ? " · IXP " + h.ix.name : "");
+    const hopTip = "hop · " + h.id + (h.as ? " · " + h.as : "") + (h.ix ? " · IXP " + h.ix.name : "")
+      + (h.ttl_confidence && h.ttl_confidence !== "high" ? " · ttl " + h.ttl_confidence : "");
     g.addEventListener("mousemove", ev => tip(ev, hopTip));
     g.addEventListener("mouseleave", hideTip);
     g.addEventListener("click", ev => { ev.stopPropagation(); showHop(h); });
@@ -168,12 +178,17 @@ function item(text, url) { const d=document.createElement("div"); d.className="i
 function showHop(h) {
   panel.textContent = "";
   panel.appendChild(title("HOP"));
-  panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as],
+  panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as], ["as name", h.as_name],
                           ["aliased asns", (h.aliased_asns||[]).join(", ")], ["machine", h.machine],
+                          ["location", h.geo ? [h.geo.city, h.geo.country].filter(Boolean).join(", ") + "  (" + h.geo.source + ")" : null],
                           ["at IXP", h.ix ? h.ix.name : null],
                           ["IXPs (AS)", h.total_ixps ? h.relevant_ixps.length + " suspected / " + h.total_ixps : null],
                           ["facilities (AS)", h.total_facilities ? h.relevant_facilities.length + " suspected / " + h.total_facilities : null]]));
   const a = link(h.source_url); if (a) panel.appendChild(a);
+  panel.appendChild(title("TTL trust · " + (h.ttl_confidence || "unknown")));
+  panel.appendChild(rows([["probe ttl", h.ttl], ["seen by flows", h.ttl_flows],
+                          ["icmp reply ttl", h.ttl_reply], ["return hops", h.ttl_return_hops]]));
+  for (const r of (h.ttl_reasons || [])) panel.appendChild(item(r, null));
   if (h.relevant_ixps && h.relevant_ixps.length) {
     panel.appendChild(title("suspected IXPs · shared with neighbour"));
     for (const x of h.relevant_ixps) panel.appendChild(item(x.name, x.source_url));
@@ -183,6 +198,7 @@ function showHop(h) {
     for (const f of h.relevant_facilities) panel.appendChild(item(f.name + (f.city ? " · " + f.city : ""), f.source_url));
   }
 }
+function fmtPlace(p) { return p && (p.city || p.country) ? [p.city, p.country].filter(Boolean).join(", ") : "?"; }
 function showEdge(e) {
   panel.textContent = "";
   panel.appendChild(title("TRAVERSAL EDGE"));
@@ -190,7 +206,12 @@ function showEdge(e) {
                           ["to", e.target + (e.to_as ? "  " + e.to_as : "")],
                           ["ttl", e.ttl], ["flows", e.count], ["min_rtt_ms", e.min_rtt_ms],
                           ["gap", e.gap ? "yes" : "no"]]));
-  const hand = e.handoff || {ixps:[], facilities:[]};
+  const hand = e.handoff || {ixps:[], facilities:[], geo:null};
+  if (hand.geo) {
+    panel.appendChild(title("endpoint locations"));
+    panel.appendChild(rows([["from", fmtPlace(hand.geo.a)], ["to", fmtPlace(hand.geo.b)],
+                            ["match", hand.geo.match ? ("yes" + (hand.geo.distance_km!=null ? " · " + Math.round(hand.geo.distance_km) + " km" : "")) : "no"]]));
+  }
   panel.appendChild(title("suspected handoff"));
   if (!hand.ixps.length && !hand.facilities.length) {
     const note = (e.from_as && e.to_as && e.from_as !== e.to_as)
@@ -198,12 +219,16 @@ function showEdge(e) {
     panel.appendChild(rows([["", note]]));
   }
   for (const x of hand.ixps) panel.appendChild(item("IXP · " + x.name, x.source_url));
-  for (const f of hand.facilities) panel.appendChild(item("facility · " + f.name + (f.city ? " · " + f.city : ""), f.source_url));
+  for (const f of hand.facilities) panel.appendChild(item("facility · " + f.name + (f.city ? " · " + f.city : "") + (f.method ? "  [" + f.method + "]" : ""), f.source_url));
 }
 function showAs(c) {
   panel.textContent = "";
-  panel.appendChild(title("AS CONTAINER · " + c.label));
+  panel.appendChild(title("AS CONTAINER · " + c.label + (c.info.name ? "  " + c.info.name : "")));
   const a = link(c.info.source_url); if (a) panel.appendChild(a);
+  if (c.info.probe_count != null) {
+    const countries = Object.entries(c.info.probe_countries || {}).map(([k, v]) => k + " " + v).join(", ");
+    panel.appendChild(rows([["RIPE Atlas probes", c.info.probe_count + (countries ? "  (" + countries + ")" : "")]]));
+  }
   const ixps = c.info.ixps || [], facs = c.info.facilities || [];
   panel.appendChild(title("suspected IXPs · " + ixps.length + " / " + c.info.total_ixps));
   if (!ixps.length) panel.appendChild(rows([["", "no shared IXP with scanned neighbours"]]));
@@ -218,6 +243,12 @@ function summary() {
   panel.appendChild(title("SCAN"));
   panel.appendChild(rows([["target", DATA.run.target], ["vantage", DATA.run.vantage],
                           ["tool", DATA.run.tool], ["hops", DATA.hops.length], ["edges", DATA.edges.length]]));
+  const low = DATA.hops.filter(h => h.ttl_confidence === "low").length;
+  const med = DATA.hops.filter(h => h.ttl_confidence === "medium").length;
+  panel.appendChild(title("TTL trust"));
+  panel.appendChild(rows([["source", "active traceroute · " + (DATA.run.tool || "?") + " · per-flow"],
+                          ["high", DATA.hops.length - low - med], ["medium", med], ["low", low]]));
+  panel.appendChild(item("ttl = probe ttl at which a hop answered; weakened by multi-flow ttl disagreement, single flow, or a preceding gap. Cross-check with RIPE Atlas / Globalping from other vantages.", null));
   panel.appendChild(title("BGP sessions · " + DATA.sessions.length));
   for (const s of DATA.sessions.slice(0, 40))
     panel.appendChild(item(`${s.speaker} → ${s.collector}  [${s.as_path}]`, s.source_url));

@@ -81,10 +81,16 @@ def cmd_trace(args) -> int:
             peeringdb=not args.no_peeringdb,
             neighbours=not args.no_neighbours,
             aliases=not args.no_alias,
+            geo=not args.no_geo,
+            probes=not args.no_probes,
         )
         print(
             f"  enriched: {stats['origin_edges']} origin edges, {stats['as_edges']} AS edges, "
             f"{stats['facilities']} facilities, {stats['ixps']} IXPs, {len(stats['asns'])} ASes"
+        )
+        print(
+            f"  AS names: {stats['named']}, hops geolocated: {stats['located']}, "
+            f"ASes with Atlas probes: {stats['probed']}"
         )
         sessions = stats["sessions"]
         print(
@@ -180,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     trace.add_argument("--no-peeringdb", action="store_true", help="skip PeeringDB facilities/IXPs")
     trace.add_argument("--no-neighbours", action="store_true", help="skip RIPEstat AS neighbours")
     trace.add_argument("--no-alias", action="store_true", help="skip rDNS alias resolution")
+    trace.add_argument("--no-geo", action="store_true", help="skip hop geolocation")
+    trace.add_argument("--no-probes", action="store_true", help="skip RIPE Atlas probe counts")
     trace.add_argument("--no-cache", action="store_true", help="bypass the source-analysis disk cache")
     trace.set_defaults(func=cmd_trace)
 

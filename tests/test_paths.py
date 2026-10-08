@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import bgp
 import parsers
 import paths.alias as alias
+import paths.analysis as analysis
 import paths.enrich as enrich
 import paths.export as paths_export
 import paths.probe as probe
@@ -169,6 +170,35 @@ class BgpTest(unittest.TestCase):
         self.assertFalse(bgp.owns("2119", "80.249.209.192", prefixes=["1.0.0.0/8"]))
 
 
+class AnalysisTest(unittest.TestCase):
+    def test_ttl_trust_confidence(self):
+        hops = [
+            {"flow_id": 1, "ttl": 1, "src_ip": "a", "reply_ttl": 254, "rtt_ms": 1.0},
+            {"flow_id": 2, "ttl": 1, "src_ip": "a", "reply_ttl": 254, "rtt_ms": 1.2},
+            {"flow_id": 1, "ttl": 2, "src_ip": "b", "reply_ttl": 63, "rtt_ms": 2.0},
+            {"flow_id": 1, "ttl": 3, "src_ip": "c", "reply_ttl": 63, "rtt_ms": 3.0},
+            {"flow_id": 2, "ttl": 3, "src_ip": "c", "reply_ttl": 63, "rtt_ms": 3.1},
+            {"flow_id": 1, "ttl": 4, "src_ip": "d", "reply_ttl": 64, "rtt_ms": 4.0},
+            {"flow_id": 2, "ttl": 5, "src_ip": "d", "reply_ttl": 64, "rtt_ms": 5.0},
+        ]
+        trust = analysis.ttl_trust(hops)
+        self.assertEqual(trust["a"]["flows"], 2)
+        self.assertEqual(trust["a"]["return_hops"], 1)
+        self.assertEqual(trust["d"]["ttls"], [4, 5])
+        self.assertEqual(analysis.ttl_confidence(trust["a"], False)[0], "high")
+        self.assertEqual(analysis.ttl_confidence(trust["b"], False)[0], "medium")
+        self.assertEqual(analysis.ttl_confidence(trust["d"], False)[0], "low")
+        self.assertEqual(analysis.ttl_confidence(trust["a"], True)[0], "medium")
+
+    def test_same_place_and_facility(self):
+        santiago = {"city": "Santiago", "country": "CL", "latitude": -33.45, "longitude": -70.66}
+        miami = {"city": "Miami", "country": "US", "latitude": 25.76, "longitude": -80.19}
+        self.assertTrue(analysis.same_place(santiago, dict(santiago))[0])
+        self.assertFalse(analysis.same_place(santiago, miami)[0])
+        self.assertTrue(analysis.facility_matches_place({"city": "Santiago", "country": "CL"}, santiago))
+        self.assertFalse(analysis.facility_matches_place({"city": "Miami", "country": "US"}, santiago))
+
+
 class AliasTest(unittest.TestCase):
     def test_router_token_strips_interface(self):
         self.assertEqual(alias.router_token("ae5.cr2.scl1.example.net"), ("cr2", "scl1.example.net"))
@@ -211,6 +241,34 @@ class ExportTest(unittest.TestCase):
         self.assertEqual([c["label"] for c in data["containers"]], ["AS15169"])
         self.assertNotIn("/*__PATHS_DATA__*/", html)
         self.assertIn("AS15169", html)
+
+    def test_geo_suspected_facility(self):
+        santiago = {"city": "Santiago", "country": "CL", "latitude": -33.45, "longitude": -70.66, "source": "ripestat.geoloc"}
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            store.save_run(conn, {"run_id": "r1", "target": "2.2.2.2", "src_ip": "10.0.0.1", "tool": "scamper", "started_at": "t"})
+            store.save_hops(conn, "r1", [
+                {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0, "icmp_type": 11, "icmp_code": 0, "is_last": False, "reply_ttl": 254},
+                {"flow_id": 1, "ttl": 2, "src_ip": "2.2.2.2", "rtt_ms": 5.0, "icmp_type": 3, "icmp_code": 3, "is_last": True, "reply_ttl": 63},
+            ])
+            store.add_node(conn, "interface", "10.0.0.1", {"geo": santiago})
+            store.add_node(conn, "interface", "2.2.2.2", {"geo": dict(santiago)})
+            store.add_node(conn, "as", "AS1", {"asn": "1", "name": "GTD"})
+            store.add_node(conn, "as", "AS2", {"asn": "2"})
+            store.add_node(conn, "facility", "FAC:SCL", {"name": "Ascenty SCL01", "city": "Santiago", "country": "CL"})
+            store.add_edge(conn, "r1", "interface", "10.0.0.1", "2.2.2.2", ttl=2, rtt_ms=5.0)
+            store.add_edge(conn, "r1", "origin", "10.0.0.1", "AS1")
+            store.add_edge(conn, "r1", "origin", "2.2.2.2", "AS2")
+            store.add_edge(conn, "r1", "facility", "AS1", "FAC:SCL")
+            data = paths_export.build(conn, "r1")
+            conn.close()
+
+        edge = data["edges"][0]
+        self.assertTrue(edge["handoff"]["geo"]["match"])
+        self.assertEqual([f["name"] for f in edge["handoff"]["facilities"]], ["Ascenty SCL01"])
+        self.assertEqual(edge["handoff"]["facilities"][0]["method"], "geo")
+        hop = next(h for h in data["hops"] if h["id"] == "2.2.2.2")
+        self.assertEqual(hop["ttl_confidence"], "medium")
 
     def test_handoff_intersection_and_ixp_port(self):
         with tempfile.TemporaryDirectory() as tmp:

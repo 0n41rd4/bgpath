@@ -69,6 +69,60 @@ def neighbours(asn) -> list[dict]:
     return [entry for entry in parsed.get("neighbours") or [] if isinstance(entry, dict)]
 
 
+def as_name(asn) -> str | None:
+    for adapter_id, field in (("peeringdb.net", "name"), ("ripestat.as-overview", "holder")):
+        try:
+            parsed = fetch_parsed(adapter_id, context={"asn": asn})
+        except Exception:
+            continue
+        if parsed.get(field):
+            return parsed[field]
+    return None
+
+
+def _geo_from(adapter_id: str, parsed: dict) -> dict | None:
+    if adapter_id in ("maxmind.geolite2", "dbip.lite"):
+        loc = {"city": parsed.get("city"), "country": parsed.get("country"),
+               "latitude": parsed.get("latitude"), "longitude": parsed.get("longitude")}
+    elif adapter_id == "ipwho.is":
+        loc = {"city": parsed.get("city"), "country": parsed.get("country"),
+               "latitude": parsed.get("latitude"), "longitude": parsed.get("longitude")}
+    elif adapter_id == "ipinfo":
+        loc = {"city": parsed.get("city"), "country": parsed.get("country"),
+               "latitude": parsed.get("latitude"), "longitude": parsed.get("longitude")}
+    elif adapter_id == "ripestat.geoloc":
+        locations = parsed.get("locations") or []
+        if not locations:
+            return None
+        best = max(locations, key=lambda item: item.get("covered_percentage") or 0)
+        loc = {"city": best.get("city"), "country": best.get("country"),
+               "latitude": best.get("latitude"), "longitude": best.get("longitude")}
+    else:
+        return None
+    if not (loc["city"] or loc["country"] or loc["latitude"] is not None):
+        return None
+    return {**loc, "source": adapter_id}
+
+
+def geo(ip: str) -> dict | None:
+    for adapter_id in ("maxmind.geolite2", "dbip.lite", "ipwho.is", "ripestat.geoloc"):
+        try:
+            parsed = fetch_parsed(adapter_id, ip)
+        except Exception:
+            continue
+        loc = _geo_from(adapter_id, parsed)
+        if loc:
+            return loc
+    return None
+
+
+def atlas_probes(asn) -> dict | None:
+    try:
+        return fetch_parsed("atlas.probes", context={"asn": asn})
+    except Exception:
+        return None
+
+
 def peeringdb_net(asn):
     return fetch_parsed("peeringdb.net", context={"asn": asn}).get("net_id")
 

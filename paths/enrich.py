@@ -92,6 +92,53 @@ def _add_origin(conn, run_id, graph, ip, asn, source, prefix=None):
     store.add_edge(conn, run_id, "origin", ip, key, attrs={"source": source, "prefix": prefix, "source_url": f"https://stat.ripe.net/{ip}"})
 
 
+def _set_node_attrs(conn, graph, layer: str, key: str, extra: dict) -> None:
+    if key in graph:
+        graph.nodes[key].update(extra)
+    attrs = {k: v for k, v in graph.nodes.get(key, {}).items() if k != "layer"}
+    attrs.update(extra)
+    store.add_node(conn, layer, key, attrs)
+
+
+def expand_as_names(conn, run_id, graph, asns: set[str]) -> int:
+    named = 0
+    for asn in sorted(asns):
+        name = query.as_name(asn)
+        if not name:
+            continue
+        _set_node_attrs(conn, graph, "as", as_key(asn), {"name": name})
+        named += 1
+    return named
+
+
+def expand_geo(conn, run_id, graph, budget: int = 20) -> int:
+    located = 0
+    interfaces = [
+        node for node, data in graph.nodes(data=True) if data.get("layer", "interface") == "interface"
+    ]
+    for ip in interfaces[:budget]:
+        loc = query.geo(ip)
+        if not loc:
+            continue
+        _set_node_attrs(conn, graph, "interface", ip, {"geo": loc})
+        located += 1
+    return located
+
+
+def expand_probes(conn, run_id, graph, asns: set[str]) -> int:
+    counted = 0
+    for asn in sorted(asns):
+        parsed = query.atlas_probes(asn)
+        if not parsed:
+            continue
+        _set_node_attrs(
+            conn, graph, "as", as_key(asn),
+            {"probe_count": parsed.get("count"), "probe_countries": parsed.get("countries") or {}},
+        )
+        counted += 1
+    return counted
+
+
 def expand_origins(conn, run_id, graph, budget: int) -> set[str]:
     asns: set[str] = set()
     interfaces = [
@@ -248,17 +295,24 @@ def expand(
     peeringdb: bool = True,
     neighbours: bool = True,
     aliases: bool = True,
+    geo: bool = True,
+    probes: bool = True,
 ) -> dict:
     sessions = sessions and not _env_off("PATHS_NO_SESSIONS")
     peeringdb = peeringdb and not _env_off("PATHS_NO_PEERINGDB")
     neighbours = neighbours and not _env_off("PATHS_NO_NEIGHBOURS")
     aliases = aliases and not _env_off("PATHS_NO_ALIAS")
+    geo = geo and not _env_off("PATHS_NO_GEO")
+    probes = probes and not _env_off("PATHS_NO_PROBES")
 
     asns = expand_origins(conn, run_id, graph, budget)
+    named = expand_as_names(conn, run_id, graph, asns)
     as_edges = expand_neighbours(conn, run_id, graph, asns, neighbours_cap) if neighbours else 0
     facilities_added, ix_added = expand_peeringdb(conn, run_id, graph, asns) if peeringdb else (0, 0)
     session_stats = expand_sessions(conn, run_id, graph) if sessions else {"prefix": None, "sessions": 0, "collectors": 0}
     alias_stats = expand_aliases(conn, run_id, graph) if aliases else {"machines": 0, "clustered": 0}
+    located = expand_geo(conn, run_id, graph, budget) if geo else 0
+    probed = expand_probes(conn, run_id, graph, asns) if probes else 0
     aliased = mark_aliasing(conn, run_id, graph)
     store.commit(conn)
     return {
@@ -267,6 +321,9 @@ def expand(
         "facilities": facilities_added,
         "ixps": ix_added,
         "asns": sorted(asns),
+        "named": named,
+        "located": located,
+        "probed": probed,
         "sessions": session_stats,
         "machines": alias_stats["machines"],
         "clustered": alias_stats["clustered"],

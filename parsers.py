@@ -320,6 +320,22 @@ def atlas_ping(body: str) -> dict:
     return {"results": results}
 
 
+def atlas_probes(body: str) -> dict:
+    payload = _obj(body)
+    results = payload.get("results") or []
+    probes = [
+        {"id": item.get("id"), "asn": item.get("asn_v4"), "country": item.get("country_code")}
+        for item in results
+        if isinstance(item, dict)
+    ]
+    countries: dict[str, int] = {}
+    for probe in probes:
+        code = probe.get("country")
+        if code:
+            countries[code] = countries.get(code, 0) + 1
+    return {"count": payload.get("count", len(probes)), "probes": probes, "countries": countries}
+
+
 def irr(body: str) -> dict:
     objects: list[dict] = []
     current: dict = {}

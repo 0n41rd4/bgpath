@@ -357,6 +357,12 @@ def _atlas_obs(ip: str, parsed: dict) -> list[dict]:
     ]
 
 
+def _atlas_probes_obs(ip: str, parsed: dict) -> list[dict]:
+    obs = [_obs("probes", "count", parsed["count"])]
+    obs += [_obs("probes", "country", {"country": code, "count": count}) for code, count in sorted(parsed["countries"].items())]
+    return obs
+
+
 def _irr_obs(ip: str, parsed: dict) -> list[dict]:
     origins: set[str] = set()
     names: set[str] = set()
@@ -602,6 +608,16 @@ SOURCES: list[dict] = [
         "fetch": _fetch_atlas,
         "parse": parsers.atlas_ping,
         "observations": _atlas_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "atlas.probes",
+        "upstream": "RIPE Atlas",
+        "evidence_class": "observed-passive",
+        "needs": ["asn"],
+        "url": lambda ctx: f"https://atlas.ripe.net/api/v2/probes/?asn_v4={ctx['asn']}&page_size=100&fields=id,asn_v4,country_code",
+        "parse": parsers.atlas_probes,
+        "observations": _atlas_probes_obs,
         "provides": lambda parsed: {},
     },
     {

@@ -7,7 +7,7 @@ the full brief.
 
 Phase 1 (fetch + raw store + observations), phase 2 (comparison + HTML report),
 phase 3 (more sources), phase 4 (entity normalization) and phase 5 (cross-IP
-analysis) are implemented. 19 always-on sources + 5 optional query an IP in
+analysis) are implemented. 20 always-on sources + 5 optional query an IP in
 dependency waves; raw responses land in the `fetches` table, normalized claims
 in the `observations` table.
 
@@ -15,7 +15,7 @@ in the `observations` table.
 
 ```sh
 python3 aranya.py 8.8.8.8 [--db FILE]          # fetch all sources, print observations
-python3 -m unittest discover -s tests          # 72 tests, fully offline
+python3 -m unittest discover -s tests          # 102 tests, fully offline
 ```
 
 ## Views
@@ -152,6 +152,7 @@ makes a disagreement meaningful:
 | `crtsh` | Certificate Transparency logs | reported |
 | `globalping.ping` | Globalping community probes | observed-active |
 | `atlas.ping` | RIPE Atlas probes | observed-active |
+| `atlas.probes` | RIPE Atlas probe locations in an AS (by country) | observed-passive |
 
 ## Deferred sources
 
