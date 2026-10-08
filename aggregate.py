@@ -11,6 +11,7 @@ import json
 import sqlite3
 
 import compare
+import entities
 import sources
 import views
 
@@ -99,6 +100,21 @@ def cell_summaries(conn, ip: str, upstream: dict[str, str] | None = None) -> lis
     return [
         summarize(topic, key, values, upstream)
         for (_ip, topic, key), values in sorted(source_values.items())
+    ]
+
+
+def canonical_cell_summaries(conn, ip: str, upstream: dict[str, str] | None = None) -> list[dict]:
+    upstream = upstream if upstream is not None else upstream_map(conn)
+    source_values = views.cells(conn, [ip])
+    return [
+        summarize(
+            topic,
+            key,
+            {source: [entities.canonical(topic, key, value) for value in values]
+             for source, values in values_by_source.items()},
+            upstream,
+        )
+        for (_ip, topic, key), values_by_source in sorted(source_values.items())
     ]
 
 

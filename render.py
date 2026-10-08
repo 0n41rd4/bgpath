@@ -8,6 +8,7 @@ Pure presentation: consumes views.py (read-only rows) and aggregate.py
 from __future__ import annotations
 
 import aggregate
+import entities
 import views
 
 GLYPHS = ["●", "◆", "▲", "■", "★", "▼", "◈", "⬟"]
@@ -45,13 +46,18 @@ def key_tag(topic: str, key: str) -> str:
     return f"{TOPIC_TAG.get(topic, topic[:3])}.{KEY_TAG.get(key, key[:3])}"
 
 
-def claim_view(conn, ip: str, color: bool = True, cap: int = 6) -> list[str]:
-    summaries = aggregate.cell_summaries(conn, ip)
+def claim_view(conn, ip: str, color: bool = True, cap: int = 6, normalized: bool = False) -> list[str]:
+    summaries = (
+        aggregate.canonical_cell_summaries(conn, ip)
+        if normalized
+        else aggregate.cell_summaries(conn, ip)
+    )
     if not summaries:
         return [f"{ip}: no observations"]
     paint = Paint(color)
     width = max(len(f"{s['topic']}.{s['key']}") for s in summaries)
-    lines = [f"{ip}  —  {len(summaries)} claim(s)   (* = reports a set)\n"]
+    tag = "   [normalized]" if normalized else ""
+    lines = [f"{ip}  —  {len(summaries)} claim(s){tag}   (* = reports a set)\n"]
     for summary in summaries:
         multi = set(summary["multi"])
         listed = [entry for entry in summary["labels"] if any(s not in multi for s in entry["sources"])]
@@ -122,4 +128,27 @@ def profile_view(conn, ips: list[str], color: bool = True) -> list[str]:
         lines.append(
             f"{row['source']:<{namew}}  {row['cells']:>5}  {agree}  {dissent}  {multi}  {single}"
         )
+    return lines
+
+
+def entities_view(conn, ip: str, color: bool = True) -> list[str]:
+    entity = entities.resolve(conn, ip)
+    lines = [f"{ip}  entity"]
+    asns = ", ".join(str(record["asn"]) for record in entity["asn"]) or "-"
+    lines.append(f"  asn      {asns}")
+    for record in entity["asn"]:
+        lines.append(f"           AS{record['asn']}  <- {', '.join(record['sources'])}")
+    lines.append(f"  country  {', '.join(entity['country']) or '-'}")
+    lines.append(f"  prefix   {', '.join(entity['prefix']) or '-'}")
+    lines.append(f"  range    {', '.join(entity['range']) or '-'}")
+    for number, raws in entity["aliases"].items():
+        groups: dict[str, list[str]] = {}
+        for raw in raws:
+            groups.setdefault(entities.org(raw), []).append(raw)
+        lines.append(f"  aliases of AS{number}:")
+        for canonical, variants in sorted(groups.items()):
+            mark = "=" if len(variants) > 1 else " "
+            lines.append(f"    [{mark}] {canonical:<24} <- {', '.join(variants)}")
+    if entity["unlinked"]:
+        lines.append(f"  unlinked names: {', '.join(entity['unlinked'])}")
     return lines

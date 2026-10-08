@@ -166,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("ip", nargs="?", help="IP address to look up")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
     parser.add_argument("--view", action="store_true", help="render the claim view for IP (no fetch)")
+    parser.add_argument("--normalize", action="store_true", help="canonicalize values before comparing (with --view)")
+    parser.add_argument("--entities", action="store_true", help="resolve the IP's ownership entity")
     parser.add_argument("--report", action="store_true", help="cross-IP overview + agreement profile")
     parser.add_argument("--export", metavar="FILE", help="write the JSON contract (no fetch)")
     parser.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
@@ -206,10 +208,17 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
         return 0
 
+    if args.entities:
+        if not args.ip:
+            parser.error("--entities needs an IP")
+        print("\n".join(render.entities_view(conn, args.ip, color)))
+        conn.close()
+        return 0
+
     if args.view:
         if not args.ip:
             parser.error("--view needs an IP")
-        print("\n".join(render.claim_view(conn, args.ip, color)))
+        print("\n".join(render.claim_view(conn, args.ip, color, normalized=args.normalize)))
         conn.close()
         return 0
 
