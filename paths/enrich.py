@@ -235,7 +235,7 @@ def expand_neighbours(conn, run_id, graph, asns: set[str], cap: int) -> int:
     return added
 
 
-def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
+def expand_peeringdb(conn, run_id, graph, asns: set[str], cap: int = 200) -> tuple[int, int]:
     facilities_added = ix_added = 0
     for asn in sorted(asns):
         try:
@@ -245,7 +245,7 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
         if net_id is None:
             continue
         try:
-            for facility in query.facilities(net_id):
+            for facility in query.facilities(net_id)[:cap]:
                 name = facility.get("name")
                 if not name:
                     continue
@@ -258,7 +258,7 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
         except Exception:
             pass
         try:
-            for ix in query.ixps(net_id):
+            for ix in query.ixps(net_id)[:cap]:
                 ix_id = ix.get("ix_id")
                 if ix_id is None:
                     continue
