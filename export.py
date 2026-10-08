@@ -50,6 +50,17 @@ def _fetch_states(conn, ips: list[str]) -> dict[tuple[str, str], dict]:
     return latest
 
 
+def _source_summary(states: list[dict]) -> list[dict]:
+    counts: dict[str, dict[str, int]] = {}
+    for cell in states:
+        row = counts.setdefault(cell["source"], {})
+        row[cell["state"]] = row.get(cell["state"], 0) + 1
+    return [
+        {"source": source, "total": sum(row.values()), **row}
+        for source, row in sorted(counts.items())
+    ]
+
+
 def _matches(topic: str, key: str, topics: set[str] | None) -> bool:
     if not topics:
         return True
@@ -137,7 +148,7 @@ def build(
         "states": states,
         "locations": sorted(locations, key=lambda r: (r["ip"], r["source"], str(r["city"]))),
         "latency": sorted(latency, key=lambda r: (r["ip"], r["source"], str(r["city"]))),
-        "agreement_profile": aggregate.agreement_profile(conn, ips, upstream),
+        "source_summary": _source_summary(states),
         "fetches": sorted(fetch_index, key=lambda r: r["id"]),
     }
     if with_observations:
