@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bgp
 import parsers
+import paths.alias as alias
 import paths.enrich as enrich
 import paths.probe as probe
 import paths.store as store
@@ -119,6 +120,7 @@ class EnrichTest(unittest.TestCase):
             {"peer_asn": 174, "peer_addr": "80.249.209.192", "collector": "route-views.linx", "as_path": "174 15169", "timestamp": "t"},
         ]}])
         swap(bgp, "collector", lambda name: {"name": name, "ipv4": "80.249.213.84", "lat": 52.36, "lng": 4.89, "country": "NL"})
+        swap(alias, "default_resolver", lambda ip: None)
         return saved
 
     def _restore(self, saved):
@@ -164,6 +166,25 @@ class BgpTest(unittest.TestCase):
     def test_owns(self):
         self.assertTrue(bgp.owns("2119", "80.249.209.192", prefixes=["80.249.0.0/16"]))
         self.assertFalse(bgp.owns("2119", "80.249.209.192", prefixes=["1.0.0.0/8"]))
+
+
+class AliasTest(unittest.TestCase):
+    def test_router_token_strips_interface(self):
+        self.assertEqual(alias.router_token("ae5.cr2.scl1.example.net"), ("cr2", "scl1.example.net"))
+        self.assertEqual(alias.router_token("reverso.190.215.80.example.net"), ("reverso", "190.215.80.example.net"))
+        self.assertIsNone(alias.router_token("localhost"))
+
+    def test_rdns_pairs_and_clusters(self):
+        rdns = {
+            "10.0.0.1": "ae1.cr2.scl1.example.net",
+            "10.0.0.2": "ae2.cr2.scl1.example.net",
+            "10.0.0.3": "ae1.cr3.scl1.example.net",
+        }
+        clusters = alias.clusters(alias.rdns_pairs(rdns))
+        self.assertEqual(clusters, [["10.0.0.1", "10.0.0.2"]])
+
+    def test_machine_key_stable(self):
+        self.assertEqual(alias.machine_key(["b", "a"]), alias.machine_key(["a", "b"]))
 
 
 if __name__ == "__main__":

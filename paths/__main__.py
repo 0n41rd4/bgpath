@@ -84,6 +84,7 @@ def cmd_trace(args) -> int:
                 print(f"    {ip} -> {', '.join(asns)}")
         else:
             print("  IP aliasing: none observed")
+        print(f"  alias resolution: {stats['machines']} machine(s), {stats['clustered']} interfaces clustered")
 
     conn.close()
     return 0
@@ -112,8 +113,8 @@ def cmd_topology(args) -> int:
     conn = store.open_store(args.db)
     rows = conn.execute(
         "SELECT layer, src, dst, ttl, count, min_rtt_ms FROM edges WHERE run_id = ? "
-        "ORDER BY CASE layer WHEN 'interface' THEN 0 WHEN 'origin' THEN 1 WHEN 'as' THEN 2 "
-        "WHEN 'session' THEN 3 WHEN 'collector' THEN 4 WHEN 'facility' THEN 5 WHEN 'ix' THEN 6 ELSE 7 END, src, dst",
+        "ORDER BY CASE layer WHEN 'interface' THEN 0 WHEN 'machine' THEN 1 WHEN 'origin' THEN 2 "
+        "WHEN 'as' THEN 3 WHEN 'session' THEN 4 WHEN 'collector' THEN 5 WHEN 'facility' THEN 6 WHEN 'ix' THEN 7 ELSE 8 END, src, dst",
         (args.run_id,),
     ).fetchall()
     if not rows:

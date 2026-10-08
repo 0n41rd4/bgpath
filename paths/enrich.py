@@ -21,6 +21,7 @@ from collections import defaultdict
 import bgp
 import query
 
+import paths.alias as alias
 import paths.store as store
 
 
@@ -63,7 +64,7 @@ def _add_origin(conn, run_id, graph, ip, asn, source, prefix=None):
     graph.add_node(key, layer="as", asn=str(asn))
     graph.add_edge(ip, key, layer="origin", asn=str(asn))
     store.add_node(conn, "as", key, {"asn": str(asn)})
-    store.add_edge(conn, run_id, "origin", ip, key, attrs={"source": source, "prefix": prefix})
+    store.add_edge(conn, run_id, "origin", ip, key, attrs={"source": source, "prefix": prefix, "source_url": f"https://stat.ripe.net/{ip}"})
 
 
 def expand_origins(conn, run_id, graph, budget: int) -> set[str]:
@@ -93,7 +94,7 @@ def expand_neighbours(conn, run_id, graph, asns: set[str], cap: int) -> int:
             graph.add_node(key, layer="as", asn=neighbour)
             graph.add_edge(as_key(asn), key, layer="as", rel=entry.get("type"))
             store.add_node(conn, "as", key, {"asn": neighbour})
-            store.add_edge(conn, run_id, "as", as_key(asn), key, attrs={"rel": entry.get("type"), "power": entry.get("power")})
+            store.add_edge(conn, run_id, "as", as_key(asn), key, attrs={"rel": entry.get("type"), "power": entry.get("power"), "source_url": f"https://stat.ripe.net/AS{asn}"})
             added += 1
     return added
 
@@ -115,8 +116,8 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
                 key = f"FAC:{name}"
                 graph.add_node(key, layer="facility", name=name)
                 graph.add_edge(as_key(asn), key, layer="facility")
-                store.add_node(conn, "facility", key, {"name": name, "city": facility.get("city"), "country": facility.get("country")})
-                store.add_edge(conn, run_id, "facility", as_key(asn), key)
+                store.add_node(conn, "facility", key, {"name": name, "city": facility.get("city"), "country": facility.get("country"), "source_url": f"https://www.peeringdb.com/search?q={name}"})
+                store.add_edge(conn, run_id, "facility", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/search?q={name}"})
                 facilities_added += 1
         except Exception:
             pass
@@ -128,8 +129,8 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
                 key = f"IX:{ix_id}"
                 graph.add_node(key, layer="ix", name=ix.get("name"))
                 graph.add_edge(as_key(asn), key, layer="ix")
-                store.add_node(conn, "ix", key, {"name": ix.get("name"), "ix_id": ix_id})
-                store.add_edge(conn, run_id, "ix", as_key(asn), key)
+                store.add_node(conn, "ix", key, {"name": ix.get("name"), "ix_id": ix_id, "source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
+                store.add_edge(conn, run_id, "ix", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
                 ix_added += 1
         except Exception:
             pass
@@ -164,14 +165,32 @@ def expand_sessions(conn, run_id, graph, cap: int = 40) -> dict:
                 info = {}
             collectors[name] = info
             graph.add_node(collector_key(name), layer="collector", name=name)
-            store.add_node(conn, "collector", collector_key(name), {"name": name, **info})
+            store.add_node(conn, "collector", collector_key(name), {"name": name, "source_url": f"https://api.routeviews.org/collector/?name={name}", **info})
         graph.add_edge(speaker, collector_key(name), layer="session", collector=name)
         store.add_edge(
             conn, run_id, "session", speaker, collector_key(name),
-            attrs={"collector": name, "as_path": fact.get("as_path"), "prefix": prefix, "timestamp": fact.get("timestamp")},
+            attrs={"collector": name, "as_path": fact.get("as_path"), "prefix": prefix, "timestamp": fact.get("timestamp"), "source_url": f"https://api.routeviews.org/prefix/{prefix}"},
         )
         sessions += 1
     return {"prefix": prefix, "sessions": sessions, "collectors": len(collectors)}
+
+
+def expand_aliases(conn, run_id, graph, resolver=None) -> dict:
+    hops: set[str] = set()
+    for src, dst, data in graph.edges(data=True):
+        if data.get("layer") in (None, "interface"):
+            hops.add(src)
+            hops.add(dst)
+    rdns = alias.rdns_map(sorted(hops), resolver)
+    clusters = alias.clusters(alias.rdns_pairs(rdns))
+    for members in clusters:
+        key = alias.machine_key(members)
+        graph.add_node(key, layer="machine", interfaces=members)
+        store.add_node(conn, "machine", key, {"interfaces": members, "method": "rdns"})
+        for ip in members:
+            graph.add_edge(ip, key, layer="machine", method="rdns")
+            store.add_edge(conn, run_id, "machine", ip, key, attrs={"method": "rdns", "confidence": 0.8})
+    return {"machines": len(clusters), "clustered": sum(len(members) for members in clusters)}
 
 
 def mark_aliasing(conn, run_id, graph) -> dict[str, list[str]]:
@@ -191,6 +210,7 @@ def expand(conn, run_id, graph, budget: int = 20, neighbours_cap: int = 40) -> d
     as_edges = expand_neighbours(conn, run_id, graph, asns, neighbours_cap)
     facilities_added, ix_added = expand_peeringdb(conn, run_id, graph, asns)
     sessions = expand_sessions(conn, run_id, graph)
+    aliases = expand_aliases(conn, run_id, graph)
     aliased = mark_aliasing(conn, run_id, graph)
     store.commit(conn)
     return {
@@ -200,5 +220,7 @@ def expand(conn, run_id, graph, budget: int = 20, neighbours_cap: int = 40) -> d
         "ixps": ix_added,
         "asns": sorted(asns),
         "sessions": sessions,
+        "machines": aliases["machines"],
+        "clustered": aliases["clustered"],
         "aliased": aliased,
     }
