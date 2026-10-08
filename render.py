@@ -48,11 +48,7 @@ def key_tag(topic: str, key: str) -> str:
 
 
 def claim_view(conn, ip: str, color: bool = True, cap: int = 6, normalized: bool = False) -> list[str]:
-    summaries = (
-        aggregate.canonical_cell_summaries(conn, ip)
-        if normalized
-        else aggregate.cell_summaries(conn, ip)
-    )
+    summaries = aggregate.cell_summaries(conn, ip, normalize=normalized)
     if not summaries:
         return [f"{ip}: no observations"]
     paint = Paint(color)
@@ -88,8 +84,8 @@ def claim_view(conn, ip: str, color: bool = True, cap: int = 6, normalized: bool
     return lines
 
 
-def overview_view(conn, ips: list[str], color: bool = True) -> list[str]:
-    verdicts = aggregate.overview(conn, ips)
+def overview_view(conn, ips: list[str], color: bool = True, normalize: bool = False) -> list[str]:
+    verdicts = aggregate.overview(conn, ips, normalize=normalize)
     keys = [key for key in views.keys(conn, ips) if any((ip, *key) in verdicts for ip in ips)]
     paint = Paint(color)
     tags = [key_tag(topic, key) for topic, key in keys]
@@ -115,8 +111,8 @@ def overview_view(conn, ips: list[str], color: bool = True) -> list[str]:
     return lines
 
 
-def profile_view(conn, ips: list[str], color: bool = True) -> list[str]:
-    rows = aggregate.agreement_profile(conn, ips)
+def profile_view(conn, ips: list[str], color: bool = True, normalize: bool = False) -> list[str]:
+    rows = aggregate.agreement_profile(conn, ips, normalize=normalize)
     paint = Paint(color)
     namew = max(len(row["source"]) for row in rows)
     lines = ["", "agreement profile:  conformity, not accuracy", ""]
@@ -155,8 +151,8 @@ def entities_view(conn, ip: str, color: bool = True) -> list[str]:
     return lines
 
 
-def stats_view(conn, ips: list[str] | None = None, color: bool = True) -> list[str]:
-    data = analyze.stats(conn, ips)
+def stats_view(conn, ips: list[str] | None = None, color: bool = True, normalize: bool = False) -> list[str]:
+    data = analyze.stats(conn, ips, normalize=normalize)
     paint = Paint(color)
     lines = [f"analysis  ·  {len(data['ips'])} ip(s)  ·  {data['claims']} claim-cells", ""]
     lines.append("verdicts:")

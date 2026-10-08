@@ -110,16 +110,18 @@ def same_name(a: str, b: str) -> bool:
 
 def canonical(topic: str, key: str, value):
     if (topic, key) == ("ownership", "asn"):
-        return asn(value)
-    if (topic, key) == ("country", "country"):
-        return country(value)
-    if key == "prefix":
-        return prefix(value)
-    if key == "range":
-        return range_canon(value)
-    if key in ("name", "org", "holder"):
-        return org(value)
-    return value
+        result = asn(value)
+    elif (topic, key) == ("country", "country"):
+        result = country(value)
+    elif key == "prefix":
+        result = prefix(value)
+    elif key == "range":
+        result = range_canon(value)
+    elif key in ("name", "org", "holder"):
+        result = org(value)
+    else:
+        return value
+    return value if result is None else result
 
 
 def resolve(conn, ip: str) -> dict:

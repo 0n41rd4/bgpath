@@ -94,47 +94,59 @@ def summarize(topic: str, key: str, source_values: dict[str, list], upstream: di
     }
 
 
-def cell_summaries(conn, ip: str, upstream: dict[str, str] | None = None) -> list[dict]:
-    upstream = upstream if upstream is not None else upstream_map(conn)
-    source_values = views.cells(conn, [ip])
-    return [
-        summarize(topic, key, values, upstream)
-        for (_ip, topic, key), values in sorted(source_values.items())
-    ]
+def canonical_values(topic: str, key: str, source_values: dict[str, list]) -> dict[str, list]:
+    """Map every value through entities.canonical, keeping unparseable ones."""
+    return {
+        source: [entities.canonical(topic, key, value) for value in values]
+        for source, values in source_values.items()
+    }
 
 
-def canonical_cell_summaries(conn, ip: str, upstream: dict[str, str] | None = None) -> list[dict]:
+def cell_summaries(
+    conn, ip: str, upstream: dict[str, str] | None = None, normalize: bool = False
+) -> list[dict]:
     upstream = upstream if upstream is not None else upstream_map(conn)
     source_values = views.cells(conn, [ip])
     return [
         summarize(
             topic,
             key,
-            {source: [entities.canonical(topic, key, value) for value in values]
-             for source, values in values_by_source.items()},
+            canonical_values(topic, key, values) if normalize else values,
             upstream,
         )
-        for (_ip, topic, key), values_by_source in sorted(source_values.items())
+        for (_ip, topic, key), values in sorted(source_values.items())
     ]
 
 
-def overview(conn, ips: list[str], upstream: dict[str, str] | None = None) -> dict[tuple[str, str, str], str]:
+def canonical_cell_summaries(conn, ip: str, upstream: dict[str, str] | None = None) -> list[dict]:
+    return cell_summaries(conn, ip, upstream, normalize=True)
+
+
+def overview(
+    conn, ips: list[str], upstream: dict[str, str] | None = None, normalize: bool = False
+) -> dict[tuple[str, str, str], str]:
     upstream = upstream if upstream is not None else upstream_map(conn)
-    return {
-        (ip, topic, key): compare.classify(
+    result: dict[tuple[str, str, str], str] = {}
+    for (ip, topic, key), values in views.cells(conn, ips).items():
+        if normalize:
+            values = canonical_values(topic, key, values)
+        result[(ip, topic, key)] = compare.classify(
             {
                 label: {upstream.get(src, src) for src in backing}
                 for label, backing in _label_sources(topic, key, values).items()
             }
         )
-        for (ip, topic, key), values in views.cells(conn, ips).items()
-    }
+    return result
 
 
-def agreement_profile(conn, ips: list[str], upstream: dict[str, str] | None = None) -> list[dict]:
+def agreement_profile(
+    conn, ips: list[str], upstream: dict[str, str] | None = None, normalize: bool = False
+) -> list[dict]:
     upstream = upstream if upstream is not None else upstream_map(conn)
     stats: dict[str, dict[str, int]] = {}
     for (_ip, topic, key), values in views.cells(conn, ips).items():
+        if normalize:
+            values = canonical_values(topic, key, values)
         summary = summarize(topic, key, values, upstream)
         for source in values:
             row = stats.setdefault(

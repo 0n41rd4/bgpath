@@ -74,6 +74,29 @@ class AggregateTest(unittest.TestCase):
         self.assertEqual(profile["a"]["agree"], 1)
         self.assertEqual(profile["a"]["dissent"], 1)
 
+    def test_normalized_overview(self):
+        seed(self.conn, [
+            ("4.4.4.4", "x", "ownership", "asn", "AS15169"),
+            ("4.4.4.4", "y", "ownership", "asn", "15169"),
+        ])
+        raw = aggregate.overview(self.conn, ["4.4.4.4"])
+        norm = aggregate.overview(self.conn, ["4.4.4.4"], normalize=True)
+        self.assertEqual(raw[("4.4.4.4", "ownership", "asn")], "disagree")
+        self.assertEqual(norm[("4.4.4.4", "ownership", "asn")], "agree")
+
+    def test_normalized_profile(self):
+        seed(self.conn, [
+            ("4.4.4.4", "x", "ownership", "org", "AS15169 Google LLC"),
+            ("4.4.4.4", "y", "ownership", "org", "Google LLC"),
+        ])
+        raw = aggregate.cell_summaries(self.conn, "4.4.4.4")
+        norm = aggregate.cell_summaries(self.conn, "4.4.4.4", normalize=True)
+        self.assertEqual(raw[0]["verdict"], "disagree")
+        self.assertEqual(norm[0]["verdict"], "agree")
+        normp = {row["source"]: row for row in aggregate.agreement_profile(self.conn, ["4.4.4.4"], normalize=True)}
+        self.assertEqual(normp["x"]["agree"], 1)
+        self.assertEqual(normp["y"]["agree"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,11 @@ class CanonicalTest(unittest.TestCase):
         self.assertEqual(entities.canonical("country", "country", "United States"), "US")
         self.assertEqual(entities.canonical("ownership", "name", "Google LLC"), "GOOGLE")
 
+    def test_canonical_keeps_unparseable(self):
+        self.assertEqual(entities.canonical("ownership", "asn", "GOOGL"), "GOOGL")
+        self.assertEqual(entities.canonical("ownership", "range", "n/a"), "n/a")
+        self.assertEqual(entities.canonical("ownership", "asn", None), None)
+
 
 class ResolveTest(unittest.TestCase):
     def setUp(self):
@@ -85,6 +90,12 @@ class ResolveTest(unittest.TestCase):
         canon = {(s["topic"], s["key"]): s for s in aggregate.canonical_cell_summaries(self.conn, "8.8.8.8")}
         self.assertEqual(canon[("ownership", "asn")]["consensus"], "15169")
         self.assertEqual(canon[("ownership", "asn")]["n_sources"], 3)
+
+    def test_unparseable_asn_not_collapsed(self):
+        store.save_observation(self.conn, "8.8.8.8", "x", "X", "reported", "ownership", "asn", "GOOGL")
+        store.save_observation(self.conn, "8.8.8.8", "y", "Y", "reported", "ownership", "asn", "FOO")
+        canon = {(s["topic"], s["key"]): s for s in aggregate.canonical_cell_summaries(self.conn, "8.8.8.8")}
+        self.assertEqual(canon[("ownership", "asn")]["verdict"], "disagree")
 
 
 if __name__ == "__main__":

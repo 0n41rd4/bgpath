@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("ip", nargs="?", help="IP address to look up")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
     parser.add_argument("--view", action="store_true", help="render the claim view for IP (no fetch)")
-    parser.add_argument("--normalize", action="store_true", help="canonicalize values before comparing (with --view)")
+    parser.add_argument("--normalize", action="store_true", help="compare canonical values (with --view/--report/--stats)")
     parser.add_argument("--entities", action="store_true", help="resolve the IP's ownership entity")
     parser.add_argument("--report", action="store_true", help="cross-IP overview + agreement profile")
     parser.add_argument("--stats", action="store_true", help="cross-IP analysis over the store")
@@ -204,14 +204,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.report:
         ips = views.ips(conn)
-        print("\n".join(render.overview_view(conn, ips, color)))
-        print("\n".join(render.profile_view(conn, ips, color)))
+        print("\n".join(render.overview_view(conn, ips, color, normalize=args.normalize)))
+        print("\n".join(render.profile_view(conn, ips, color, normalize=args.normalize)))
         conn.close()
         return 0
 
     if args.stats:
         ips = [args.ip] if args.ip else None
-        print("\n".join(render.stats_view(conn, ips, color)))
+        print("\n".join(render.stats_view(conn, ips, color, normalize=args.normalize)))
         conn.close()
         return 0
 

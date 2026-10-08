@@ -13,7 +13,7 @@ import aggregate
 import views
 
 
-def stats(conn, ips: list[str] | None = None) -> dict:
+def stats(conn, ips: list[str] | None = None, normalize: bool = False) -> dict:
     ips = ips if ips is not None else views.ips(conn)
     upstream = aggregate.upstream_map(conn)
     cells = views.cells(conn, ips)
@@ -22,6 +22,8 @@ def stats(conn, ips: list[str] | None = None) -> dict:
     per_key: dict[tuple[str, str], dict] = {}
     anycast: list[dict] = []
     for (ip, topic, key), source_values in cells.items():
+        if normalize:
+            source_values = aggregate.canonical_values(topic, key, source_values)
         summary = aggregate.summarize(topic, key, source_values, upstream)
         verdict = summary["verdict"]
         verdicts[verdict] += 1

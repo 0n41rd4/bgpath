@@ -15,7 +15,7 @@ in the `observations` table.
 
 ```sh
 python3 aranya.py 8.8.8.8 [--db FILE]          # fetch all sources, print observations
-python3 -m unittest discover -s tests          # 67 tests, fully offline
+python3 -m unittest discover -s tests          # 72 tests, fully offline
 ```
 
 ## Views
@@ -25,9 +25,10 @@ side by side and rank them rather than collapsing to one answer.
 
 ```sh
 python3 aranya.py 8.8.8.8 --view               # per-IP claims (no fetch)
-python3 aranya.py 8.8.8.8 --view --normalize   # same, comparing canonical values
+python3 aranya.py 8.8.8.8 --view --normalize   # compare canonical values
 python3 aranya.py 8.8.8.8 --entities           # resolved ownership entity + aliases
 python3 aranya.py --report                     # cross-IP overview + agreement profile
+python3 aranya.py --report --normalize         # ... over canonical values
 python3 aranya.py --stats                      # cross-IP analysis (contested claims, anycast, sources)
 python3 aranya.py --stats 8.8.8.8              # analysis scoped to one IP
 ```
@@ -76,8 +77,9 @@ Internals: `views.py` holds read-only projections over the existing tables,
 
 `entities.py` canonicalises values without touching the raw store: ASN to int
 (`AS15169` → `15169`), country to ISO-2, prefix to CIDR, range normalised, org
-names stripped of `AS<n>` prefixes and legal suffixes. `--view --normalize`
-compares these canonical values, so formatting-only disagreements vanish.
+names stripped of `AS<n>` prefixes and legal suffixes. `--normalize` applies
+this to any view (`--view`, `--report`, `--stats`), so formatting-only
+disagreements vanish; values it cannot parse are kept verbatim, never merged.
 
 `entities.resolve()` anchors name aliases to the ASN the same source reports,
 then folds in unlinked names whose canonical form matches a known entity — so

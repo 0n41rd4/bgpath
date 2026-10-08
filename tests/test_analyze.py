@@ -59,6 +59,14 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(data["claims"], 2)
         self.assertEqual(data["anycast"], [])
 
+    def test_normalize_reduces_disagreement(self):
+        store.save_observation(self.conn, "4.4.4.4", "a", "A", "reported", "ownership", "asn", "AS15169")
+        store.save_observation(self.conn, "4.4.4.4", "b", "B", "reported", "ownership", "asn", "15169")
+        raw = analyze.stats(self.conn, ["4.4.4.4"])
+        norm = analyze.stats(self.conn, ["4.4.4.4"], normalize=True)
+        self.assertEqual(raw["verdicts"].get("disagree"), 1)
+        self.assertEqual(norm["verdicts"].get("agree"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
