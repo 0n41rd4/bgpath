@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Refresh the local geolocation databases that aranya reads via MAXMIND_DB / DBIP_DB.
-# Cron/systemd-safe. Never prints secrets.
+# Refresh the local geolocation databases that aranya reads via
+# MAXMIND_DB / MAXMIND_ASN_DB / DBIP_DB. Cron/systemd-safe; never prints secrets.
 #
-# DB-IP Lite  (City): free, published monthly, no account.
-# MaxMind GeoLite2 (City): free, published weekly, needs MAXMIND_LICENSE_KEY
-#   (from a free account). Read from the environment, or from a gitignored
-#   scripts/.geoip.env file.
+# DB-IP Lite (City): free, monthly, no account.
+# MaxMind GeoLite2 (City + ASN): free, weekly, needs MAXMIND_LICENSE_KEY (from a
+#   free account). Read from the environment or a gitignored scripts/.geoip.env.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,14 +29,18 @@ for offset in 0 -1; do
   fi
 done
 
-# --- MaxMind GeoLite2-City: weekly, needs the license key ---
+# --- MaxMind GeoLite2: weekly, needs the license key ---
+# City -> location claims; ASN -> autonomous_system_number/organization.
+# (GeoLite2-Country is redundant: City already carries country + registered_country.)
 if [[ -n "${MAXMIND_LICENSE_KEY:-}" ]]; then
-  tmpdir=$(mktemp -d)
-  trap 'rm -rf "$tmpdir"' EXIT
-  curl -fsSL "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz" -o "$tmpdir/geoip.tar.gz"
-  tar -xzf "$tmpdir/geoip.tar.gz" -C "$tmpdir"
-  find "$tmpdir" -name '*.mmdb' -exec cp {} "$DATA_DIR/GeoLite2-City.mmdb" \;
-  echo "MaxMind GeoLite2-City: updated"
+  for edition in GeoLite2-City GeoLite2-ASN; do
+    tmpdir=$(mktemp -d)
+    curl -fsSL "https://download.maxmind.com/app/geoip_download?edition_id=${edition}&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz" -o "$tmpdir/geoip.tar.gz"
+    tar -xzf "$tmpdir/geoip.tar.gz" -C "$tmpdir"
+    find "$tmpdir" -name '*.mmdb' -exec cp {} "$DATA_DIR/${edition}.mmdb" \;
+    rm -rf "$tmpdir"
+    echo "MaxMind ${edition}: updated"
+  done
 else
   echo "MaxMind: MAXMIND_LICENSE_KEY not set, skipped" >&2
 fi

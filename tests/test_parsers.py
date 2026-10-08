@@ -80,6 +80,11 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertEqual(r["city"], "Mountain View")
         self.assertEqual(r["latitude"], 37.4056)
 
+    def test_mmdb_asn(self):
+        r = parsers.mmdb_asn(load("mmdb_asn.json"))
+        self.assertEqual(r["asn"], "15169")
+        self.assertEqual(r["org"], "Google LLC")
+
 
 class ToleranceTest(unittest.TestCase):
     def test_non_dict(self):

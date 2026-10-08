@@ -194,6 +194,15 @@ def mmdb(body: str) -> dict:
     }
 
 
+def mmdb_asn(body: str) -> dict:
+    payload = _obj(body)
+    number = payload.get("autonomous_system_number")
+    return {
+        "asn": str(number) if number is not None else None,
+        "org": payload.get("autonomous_system_organization"),
+    }
+
+
 def _float(text: str) -> float | None:
     try:
         return float(text)

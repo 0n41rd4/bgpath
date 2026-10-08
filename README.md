@@ -18,15 +18,16 @@ python3 -m unittest discover -s tests          # 34 tests, fully offline
 
 ## Optional sources
 
-Four sources need credentials or a local database file; without them they are
+These sources need credentials or a local database file; without them they are
 reported as `skipped (...)`:
 
 | Source | Env var | Setup |
 |---|---|---|
 | IPinfo | `IPINFO_TOKEN` | free token at ipinfo.io |
 | Shodan host API | `SHODAN_API_KEY` | account at shodan.io; **the host API consumes query credits (paid)** — keyless `internetdb` already covers the free slice |
-| MaxMind GeoLite2 | `MAXMIND_DB` | path to GeoLite2-City `.mmdb` (free account at maxmind.com) + `pip install maxminddb` |
-| DB-IP Lite | `DBIP_DB` | path to DB-IP Lite `.mmdb` (free download at db-ip.com) + `pip install maxminddb` |
+| MaxMind GeoLite2 City | `MAXMIND_DB` | path to GeoLite2-City `.mmdb` (free account at maxmind.com) + `pip install maxminddb` |
+| MaxMind GeoLite2 ASN | `MAXMIND_ASN_DB` | path to GeoLite2-ASN `.mmdb` (same account) |
+| DB-IP Lite | `DBIP_DB` | path to DB-IP Lite City `.mmdb` (free download at db-ip.com) |
 
 Tokens/keys are redacted in the stored `fetches.url`.
 
@@ -36,7 +37,7 @@ The `.mmdb` files go stale: **MaxMind GeoLite2 updates ~weekly**, **DB-IP Lite
 ~monthly**. Refresh them with:
 
 ```sh
-./scripts/update_geoip.sh              # writes data/dbip-city-lite.mmdb and data/GeoLite2-City.mmdb
+./scripts/update_geoip.sh   # writes data/dbip-city-lite.mmdb, data/GeoLite2-City.mmdb, data/GeoLite2-ASN.mmdb
 ```
 
 The MaxMind license key is read from the environment or from the gitignored
@@ -77,7 +78,18 @@ Then `systemctl --user enable --now aranya-geoip.timer`.
 
 ## Data files
 
-DB-IP Lite ships **City**; MaxMind GeoLite2 also offers **ASN** and **Country**
-editions. The current `maxmind.geolite2` / `dbip.lite` adapters expect the City
-schema (`country`/`city`/`location`), so City is what to fetch. ASN/Country
-editions use a different schema and would need their own adapters.
+MaxMind GeoLite2 offers **City**, **ASN** and **Country** editions; DB-IP Lite
+ships **City**. What aranya uses, and why:
+
+- **City** (`MAXMIND_DB`, `DBIP_DB`) — `country` / `city` / `location` schema →
+  `location` claims.
+- **ASN** (`MAXMIND_ASN_DB`) — `autonomous_system_number` /
+  `autonomous_system_organization` → not in City, so it adds `ownership.asn`
+  and `ownership.org` claims. Its own schema, hence its own adapter
+  (`maxmind.asn`).
+- **Country** — *not fetched*: City already carries `country` and
+  `registered_country`, so the Country edition is redundant with City.
+
+Independence note: City, ASN and DB-IP are all geolocation/registry derivatives
+and likely share inputs, so they count as roughly one upstream "vote" — they add
+coverage, not independent evidence.

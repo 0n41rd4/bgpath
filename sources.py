@@ -285,6 +285,13 @@ def _mmdb_obs(ip: str, parsed: dict) -> list[dict]:
     ]
 
 
+def _mmdb_asn_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs("ownership", "asn", parsed["asn"]),
+        _obs("ownership", "org", parsed["org"]),
+    ]
+
+
 SOURCES: list[dict] = [
     {
         "id": "ripestat.network-info",
@@ -478,6 +485,18 @@ SOURCES: list[dict] = [
         "fetch": _make_mmdb_fetch("DBIP_DB"),
         "parse": parsers.mmdb,
         "observations": _mmdb_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "maxmind.asn",
+        "upstream": "MaxMind",
+        "evidence_class": "reported",
+        "needs": [],
+        "precheck": lambda: _mmdb_precheck("MAXMIND_ASN_DB"),
+        "url": lambda ctx: f"MAXMIND_ASN_DB {ctx['ip']}",
+        "fetch": _make_mmdb_fetch("MAXMIND_ASN_DB"),
+        "parse": parsers.mmdb_asn,
+        "observations": _mmdb_asn_obs,
         "provides": lambda parsed: {},
     },
 ]
