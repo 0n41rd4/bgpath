@@ -12,8 +12,8 @@ import views
 
 GLYPHS = ["●", "◆", "▲", "■", "★", "▼", "◈", "⬟"]
 CLAIM_COLORS = [96, 95, 93, 92, 94, 91]
-VERDICT_COLOR = {"agree": 32, "spread": 33, "disagree": 31}
-VERDICT_GLYPH = {"agree": ".", "spread": "+", "disagree": "#"}
+VERDICT_COLOR = {"agree": 32, "single": 90, "spread": 33, "disagree": 31}
+VERDICT_GLYPH = {"agree": ".", "single": "o", "spread": "+", "disagree": "#"}
 ABSENT_COLOR = 90
 
 TOPIC_TAG = {
@@ -51,35 +51,31 @@ def claim_view(conn, ip: str, color: bool = True, cap: int = 6) -> list[str]:
         return [f"{ip}: no observations"]
     paint = Paint(color)
     width = max(len(f"{s['topic']}.{s['key']}") for s in summaries)
-    lines = [f"{ip}  —  {len(summaries)} claim(s)   (* = source reports a set)\n"]
+    lines = [f"{ip}  —  {len(summaries)} claim(s)   (* = reports a set)\n"]
     for summary in summaries:
-        multi = summary["multi"]
-        listed = []
-        for label, backing in summary["labels"]:
-            singles = [src for src in sorted(backing) if src not in multi]
-            if singles:
-                listed.append((label, singles, [src for src in sorted(backing) if src in multi]))
-        listed.sort(key=lambda item: (-len(item[1]), item[0]))
-
-        verdict = "spread" if summary["enumeration"] else summary["verdict"]
-        status = "enumerated" if summary["enumeration"] else summary["verdict"]
+        multi = set(summary["multi"])
+        listed = [entry for entry in summary["labels"] if any(s not in multi for s in entry["sources"])]
+        verdict = summary["verdict"]
         mark = paint(aggregate.VERDICT_MARK[verdict], VERDICT_COLOR[verdict])
         head = f"{summary['topic']}.{summary['key']:<{width}}"
-        lines.append(f"{head}  [{mark}] {status:<10} {len(summary['sources'])} source(s)")
-
-        for index, (label, singles, multis) in enumerate(listed[:cap]):
+        lines.append(
+            f"{head}  [{mark}] {verdict:<10} "
+            f"{summary['n_sources']} source(s), {summary['n_upstreams']} upstream(s)"
+        )
+        for index, entry in enumerate(listed[:cap]):
             glyph = paint(GLYPHS[index % len(GLYPHS)], CLAIM_COLORS[index % len(CLAIM_COLORS)])
-            names = ", ".join(singles + [f"{src}*" for src in multis])
-            lines.append(f"    {glyph} {label:<34} {names}")
+            names = ", ".join(
+                f"{src}*" if src in multi else src for src in entry["sources"]
+            )
+            lines.append(f"    {glyph} {entry['label']:<34} {names}")
         if len(listed) > cap:
             lines.append(f"      + {len(listed) - cap} more value(s)")
-
-        for source in sorted(multi):
-            count = summary["counts"][source]
-            sample = ", ".join(summary["source_labels"][source][:3])
+        for source in summary["multi"]:
+            labels = summary["source_labels"][source]
+            sample = ", ".join(labels[:3])
             glyph = paint("~", 33)
             lines.append(
-                f"    {glyph} {source + '*':<34} {count} values: {sample}{'…' if count > 3 else ''}"
+                f"    {glyph} {source + '*':<34} {len(labels)} values: {sample}{'…' if len(labels) > 3 else ''}"
             )
         lines.append("")
     return lines
@@ -101,11 +97,11 @@ def overview_view(conn, ips: list[str], color: bool = True) -> list[str]:
             if verdict is None:
                 row.append(paint("·", ABSENT_COLOR).rjust(width))
             else:
-                glyph = paint(VERDICT_GLYPH[verdict], VERDICT_COLOR[verdict])
-                row.append(f"{glyph:>{width}}")
+                row.append(f"{paint(VERDICT_GLYPH[verdict], VERDICT_COLOR[verdict]):>{width}}")
         lines.append(f"{ip:>{ipw}}  " + " ".join(row))
     legend = "  ".join(
-        f"{paint(VERDICT_GLYPH[v], VERDICT_COLOR[v])} {v}" for v in ("agree", "spread", "disagree")
+        f"{paint(VERDICT_GLYPH[v], VERDICT_COLOR[v])} {v}"
+        for v in ("agree", "single", "spread", "disagree")
     )
     lines.append("")
     lines.append(f"legend: {legend}   {paint('·', ABSENT_COLOR)} absent")
@@ -113,16 +109,17 @@ def overview_view(conn, ips: list[str], color: bool = True) -> list[str]:
 
 
 def profile_view(conn, ips: list[str], color: bool = True) -> list[str]:
-    rows = aggregate.profile(conn, ips)
+    rows = aggregate.agreement_profile(conn, ips)
     paint = Paint(color)
     namew = max(len(row["source"]) for row in rows)
-    lines = ["", f"source profile:  agreement with each cell's consensus", ""]
-    lines.append(f"{'source':<{namew}}  cells  agree  dissent  multi")
+    lines = ["", "agreement profile:  conformity, not accuracy", ""]
+    lines.append(f"{'source':<{namew}}  cells  agree  dissent  multi  single")
     for row in rows:
         agree = paint(str(row["agree"]).rjust(5), 32)
         dissent = paint(str(row["dissent"]).rjust(8), 31)
         multi = paint(str(row["multi"]).rjust(6), 33)
+        single = paint(str(row["single"]).rjust(7), 90)
         lines.append(
-            f"{row['source']:<{namew}}  {row['cells']:>5}  {agree}  {dissent}  {multi}"
+            f"{row['source']:<{namew}}  {row['cells']:>5}  {agree}  {dissent}  {multi}  {single}"
         )
     return lines

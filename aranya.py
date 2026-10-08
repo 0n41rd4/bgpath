@@ -14,6 +14,7 @@ import sys
 import time
 
 import compare
+import export
 import observe
 import render
 import sources
@@ -33,6 +34,7 @@ def run_adapter(
     if "precheck" in adapter:
         reason = adapter["precheck"]()
         if reason:
+            store.save_fetch(conn, adapter["id"], adapter["id"], None, None, f"skipped ({reason})", ip)
             return f"skipped ({reason})", None
 
     url = adapter["url"](context)
@@ -44,7 +46,7 @@ def run_adapter(
         status, body, error = adapter["fetch"](ip, context)
     else:
         status, body, error = sources.http_get(url)
-    fetch_id = store.save_fetch(conn, adapter["id"], sources.redact_url(url), status, body, error)
+    fetch_id = store.save_fetch(conn, adapter["id"], sources.redact_url(url), status, body, error, ip)
 
     if error:
         return f"error ({error})", None
@@ -95,7 +97,9 @@ def run_all(conn, ip: str, fetch=None) -> dict:
             parsed_results[adapter["id"]] = parsed
 
     for adapter in remaining:
-        statuses[adapter["id"]] = f"skipped (missing {', '.join(adapter['needs'])})"
+        status = f"skipped (missing {', '.join(adapter['needs'])})"
+        statuses[adapter["id"]] = status
+        store.save_fetch(conn, adapter["id"], adapter["id"], None, None, status, ip)
 
     return statuses, parsed_results
 
@@ -139,17 +143,61 @@ def print_comparison(conn, ip: str) -> None:
             print(f"       {_fmt(json.loads(value))}  <-  {', '.join(sources)}")
 
 
+def show_fetch(conn, fetch_id: int) -> int:
+    row = conn.execute(
+        "SELECT id, ip, source, url, status, error, fetched_at, body FROM fetches WHERE id = ?",
+        (fetch_id,),
+    ).fetchone()
+    if not row:
+        print(f"no fetch with id {fetch_id}")
+        return 1
+    fid, ip, source, url, status, error, fetched_at, body = row
+    print(f"fetch {fid}  {source}  {ip}  status={status}  {fetched_at}")
+    print(f"url: {url}")
+    if error:
+        print(f"error: {error}")
+    print("---")
+    print(body or "")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", nargs="?", help="IP address to look up")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
     parser.add_argument("--view", action="store_true", help="render the claim view for IP (no fetch)")
-    parser.add_argument("--report", action="store_true", help="cross-IP overview + source profile")
+    parser.add_argument("--report", action="store_true", help="cross-IP overview + agreement profile")
+    parser.add_argument("--export", metavar="FILE", help="write the JSON contract (no fetch)")
+    parser.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
+    parser.add_argument("--ips", help="comma-separated IP filter for --export/--html")
+    parser.add_argument("--topics", help="comma-separated topic or topic.key filter")
+    parser.add_argument("--with-observations", action="store_true", help="embed raw observations in export")
+    parser.add_argument("--show-fetch", type=int, metavar="ID", help="print a stored fetch body")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     args = parser.parse_args(argv)
 
     color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
     conn = store.open_store(args.db)
+
+    if args.show_fetch is not None:
+        code = show_fetch(conn, args.show_fetch)
+        conn.close()
+        return code
+
+    if args.export or args.html:
+        ips = args.ips.split(",") if args.ips else ([args.ip] if args.ip else None)
+        topics = set(args.topics.split(",")) if args.topics else None
+        obj = export.build(conn, ips=ips, topics=topics, with_observations=args.with_observations)
+        if args.export:
+            with open(args.export, "w", encoding="utf-8") as handle:
+                handle.write(export.to_json(obj))
+            print(f"wrote {args.export}")
+        if args.html:
+            with open(args.html, "w", encoding="utf-8") as handle:
+                handle.write(export.render_html(obj))
+            print(f"wrote {args.html}")
+        conn.close()
+        return 0
 
     if args.report:
         ips = views.ips(conn)
@@ -166,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.ip:
-        parser.error("an IP is required (or use --report)")
+        parser.error("an IP is required (or use --report/--export/--html)")
 
     statuses, _ = run_all(conn, args.ip)
 

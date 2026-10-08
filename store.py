@@ -17,6 +17,7 @@ def open_store(path: str) -> sqlite3.Connection:
         """
         CREATE TABLE IF NOT EXISTS fetches (
             id INTEGER PRIMARY KEY,
+            ip TEXT,
             source TEXT NOT NULL,
             url TEXT NOT NULL,
             status INTEGER,
@@ -26,6 +27,9 @@ def open_store(path: str) -> sqlite3.Connection:
         )
         """
     )
+    fetch_cols = {row[1] for row in conn.execute("PRAGMA table_info(fetches)")}
+    if "ip" not in fetch_cols:
+        conn.execute("ALTER TABLE fetches ADD COLUMN ip TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS observations (
@@ -88,10 +92,11 @@ def save_fetch(
     status: int | None,
     body: str | None,
     error: str | None,
+    ip: str | None = None,
 ) -> int:
     cursor = conn.execute(
-        "INSERT INTO fetches (source, url, status, body, error, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (source, url, status, body, error, now()),
+        "INSERT INTO fetches (ip, source, url, status, body, error, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ip, source, url, status, body, error, now()),
     )
     conn.commit()
     return cursor.lastrowid

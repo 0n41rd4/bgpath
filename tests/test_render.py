@@ -13,14 +13,14 @@ class RenderTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.conn = store.open_store(str(Path(self.tmp.name) / "t.db"))
-        store.save_observation(self.conn, "8.8.8.8", "a", "up", "reported", "ownership", "asn", "15169")
-        store.save_observation(self.conn, "8.8.8.8", "b", "up", "reported", "ownership", "asn", "15169")
+        store.save_observation(self.conn, "8.8.8.8", "a", "a", "reported", "ownership", "asn", "15169")
+        store.save_observation(self.conn, "8.8.8.8", "b", "b", "reported", "ownership", "asn", "15169")
         store.save_observation(
-            self.conn, "8.8.8.8", "a", "up", "reported", "location", "claim",
+            self.conn, "8.8.8.8", "a", "a", "reported", "location", "claim",
             {"city": "Mountain View", "country": "US"},
         )
         store.save_observation(
-            self.conn, "8.8.8.8", "b", "up", "reported", "location", "claim",
+            self.conn, "8.8.8.8", "b", "b", "reported", "location", "claim",
             {"city": "Denver", "country": "US"},
         )
 
@@ -47,7 +47,7 @@ class RenderTest(unittest.TestCase):
 
     def test_profile_view(self):
         text = "\n".join(render.profile_view(self.conn, ["8.8.8.8"], color=False))
-        self.assertIn("source profile:", text)
+        self.assertIn("agreement profile:", text)
         self.assertIn("cells", text)
 
 

@@ -25,10 +25,10 @@ def group(conn, ip: str) -> dict[tuple[str, str], dict[str, set[str]]]:
 
 
 def classify(values: dict[str, set[str]]) -> str:
-    sources = {source for sources in values.values() for source in sources}
+    groups = {group for groups in values.values() for group in groups}
     if len(values) == 1:
-        return "agree"
-    if len(sources) == 1:
+        return "single" if len(groups) == 1 else "agree"
+    if len(groups) == 1:
         return "spread"
     return "disagree"
 

@@ -1,18 +1,31 @@
 """Aggregate raw observations into comparable claims.
 
 This is the opinionated layer: it reduces raw values to short labels, clusters
-sources by label, and decides consensus/dissent. It also produces the cross-IP
-source profile. Read-only projections live in views.py.
+sources by label, and decides consensus/dissent over independent upstreams.
+Read-only projections live in views.py.
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import compare
+import sources
 import views
 
-VERDICT_MARK = {"agree": "=", "spread": "~", "disagree": "!"}
+VERDICT_MARK = {"agree": "=", "single": "·", "spread": "~", "disagree": "!"}
+
+
+def upstream_map(conn: sqlite3.Connection) -> dict[str, str]:
+    """source id -> independent upstream. Registry wins; stored value is the
+    fallback for sources no longer in the registry. Unknowns stay distinct."""
+    mapping: dict[str, str] = {}
+    for source, upstream in conn.execute("SELECT DISTINCT source, upstream FROM observations"):
+        mapping[source] = upstream
+    for adapter in sources.SOURCES:
+        mapping[adapter["id"]] = adapter.get("upstream")
+    return {source: (upstream or source) for source, upstream in mapping.items()}
 
 
 def claim_label(topic: str, key: str, value: object, limit: int = 32) -> str:
@@ -34,67 +47,98 @@ def claim_label(topic: str, key: str, value: object, limit: int = 32) -> str:
     return text
 
 
-def claims(topic: str, key: str, source_values: dict[str, list]) -> tuple[dict[str, set[str]], set[str]]:
-    labels: dict[str, set[str]] = {}
-    multi: set[str] = set()
-    for source, values in source_values.items():
-        seen = {claim_label(topic, key, value) for value in values}
-        if len(seen) > 1:
-            multi.add(source)
-        for label in seen:
-            labels.setdefault(label, set()).add(source)
-    return labels, multi
-
-
-def summarize(topic: str, key: str, source_values: dict[str, list]) -> dict:
-    labels, multi = claims(topic, key, source_values)
-    ranked = sorted(labels.items(), key=lambda item: (-len(item[1]), item[0]))
-    consensus = ranked[0][0]
+def labels_by_source(topic: str, key: str, source_values: dict[str, list]) -> dict[str, set[str]]:
     return {
-        "topic": topic,
-        "key": key,
-        "verdict": compare.classify(labels),
-        "consensus": consensus,
-        "backers": sorted(labels[consensus]),
-        "labels": ranked,
-        "multi": multi,
-        "counts": {source: len(values) for source, values in source_values.items()},
-        "source_labels": {
-            source: sorted({claim_label(topic, key, value) for value in values})
-            for source, values in source_values.items()
-        },
-        "enumeration": len(source_values) == 1 and max(len(v) for v in source_values.values()) > 1,
-        "sources": sorted(source_values),
+        source: {claim_label(topic, key, value) for value in values}
+        for source, values in source_values.items()
     }
 
 
-def cell_summaries(conn, ip: str) -> list[dict]:
+def summarize(topic: str, key: str, source_values: dict[str, list], upstream: dict[str, str]) -> dict:
+    per_source = labels_by_source(topic, key, source_values)
+    label_upstreams: dict[str, set[str]] = {}
+    label_sources: dict[str, set[str]] = {}
+    for source, labels in per_source.items():
+        group = upstream.get(source, source)
+        for label in labels:
+            label_upstreams.setdefault(label, set()).add(group)
+            label_sources.setdefault(label, set()).add(source)
+
+    ranked = sorted(
+        label_upstreams,
+        key=lambda label: (-len(label_upstreams[label]), -len(label_sources[label]), label),
+    )
+    consensus = ranked[0]
+    return {
+        "topic": topic,
+        "key": key,
+        "verdict": compare.classify(label_upstreams),
+        "consensus": consensus,
+        "backers": sorted(label_sources[consensus]),
+        "labels": [
+            {
+                "label": label,
+                "sources": sorted(label_sources[label]),
+                "upstreams": sorted(label_upstreams[label]),
+            }
+            for label in ranked
+        ],
+        "multi": sorted(source for source, labels in per_source.items() if len(labels) > 1),
+        "counts": {source: len(values) for source, values in source_values.items()},
+        "source_labels": {source: sorted(labels) for source, labels in per_source.items()},
+        "sources": sorted(source_values),
+        "n_sources": len(source_values),
+        "n_upstreams": len({upstream.get(s, s) for s in source_values}),
+        "enumeration": len(source_values) == 1 and max(len(v) for v in source_values.values()) > 1,
+    }
+
+
+def cell_summaries(conn, ip: str, upstream: dict[str, str] | None = None) -> list[dict]:
+    upstream = upstream if upstream is not None else upstream_map(conn)
     source_values = views.cells(conn, [ip])
-    out = []
-    for (_ip, topic, key), values in sorted(source_values.items()):
-        out.append(summarize(topic, key, values))
-    return out
+    return [
+        summarize(topic, key, values, upstream)
+        for (_ip, topic, key), values in sorted(source_values.items())
+    ]
 
 
-def overview(conn, ips: list[str]) -> dict[tuple[str, str, str], str]:
-    source_values = views.cells(conn, ips)
-    return {(ip, topic, key): compare.classify(claims(topic, key, values)[0])
-            for (ip, topic, key), values in source_values.items()}
+def overview(conn, ips: list[str], upstream: dict[str, str] | None = None) -> dict[tuple[str, str, str], str]:
+    upstream = upstream if upstream is not None else upstream_map(conn)
+    return {
+        (ip, topic, key): compare.classify(
+            {
+                label: {upstream.get(src, src) for src in backing}
+                for label, backing in _label_sources(topic, key, values).items()
+            }
+        )
+        for (ip, topic, key), values in views.cells(conn, ips).items()
+    }
 
 
-def profile(conn, ips: list[str]) -> list[dict]:
-    source_values = views.cells(conn, ips)
+def agreement_profile(conn, ips: list[str], upstream: dict[str, str] | None = None) -> list[dict]:
+    upstream = upstream if upstream is not None else upstream_map(conn)
     stats: dict[str, dict[str, int]] = {}
-    for (_ip, topic, key), values in source_values.items():
-        labels, multi = claims(topic, key, values)
-        consensus = sorted(labels.items(), key=lambda item: (-len(item[1]), item[0]))[0][0]
+    for (_ip, topic, key), values in views.cells(conn, ips).items():
+        summary = summarize(topic, key, values, upstream)
         for source in values:
-            row = stats.setdefault(source, {"cells": 0, "agree": 0, "dissent": 0, "multi": 0})
+            row = stats.setdefault(
+                source, {"cells": 0, "agree": 0, "dissent": 0, "multi": 0, "single": 0}
+            )
             row["cells"] += 1
-            if source in multi:
+            if source in summary["multi"]:
                 row["multi"] += 1
-            elif source in labels.get(consensus, set()):
+            elif summary["verdict"] == "single":
+                row["single"] += 1
+            elif summary["source_labels"][source][0] == summary["consensus"]:
                 row["agree"] += 1
             else:
                 row["dissent"] += 1
     return [{"source": source, **row} for source, row in sorted(stats.items())]
+
+
+def _label_sources(topic: str, key: str, source_values: dict[str, list]) -> dict[str, set[str]]:
+    labels: dict[str, set[str]] = {}
+    for source, labels_of_source in labels_by_source(topic, key, source_values).items():
+        for label in labels_of_source:
+            labels.setdefault(label, set()).add(source)
+    return labels

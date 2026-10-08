@@ -11,7 +11,7 @@ import store
 
 def seed(conn, rows):
     for ip, source, topic, key, value in rows:
-        store.save_observation(conn, ip, source, "up", "reported", topic, key, value)
+        store.save_observation(conn, ip, source, source, "reported", topic, key, value)
 
 
 class AggregateTest(unittest.TestCase):
@@ -69,7 +69,7 @@ class AggregateTest(unittest.TestCase):
         self.assertEqual(verdicts[("1.1.1.1", "ownership", "asn")], "disagree")
 
     def test_profile(self):
-        profile = {row["source"]: row for row in aggregate.profile(self.conn, ["8.8.8.8"])}
+        profile = {row["source"]: row for row in aggregate.agreement_profile(self.conn, ["8.8.8.8"])}
         self.assertEqual(profile["a"]["cells"], 2)
         self.assertEqual(profile["a"]["agree"], 1)
         self.assertEqual(profile["a"]["dissent"], 1)

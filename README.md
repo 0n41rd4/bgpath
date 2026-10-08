@@ -66,6 +66,39 @@ Internals: `views.py` holds read-only projections over the existing tables,
 `aggregate.py` turns those rows into labelled claims / consensus / profiles, and
 `render.py` draws them. Nothing here writes to the store.
 
+## HTML report
+
+`export.py` renders the same aggregate data as a **self-contained, offline HTML
+file** (no server, no CDN, no build step):
+
+```sh
+python3 aranya.py --html report.html --with-observations
+python3 aranya.py --export data.json --ips 8.8.8.8,1.1.1.1 --topics location,ownership
+python3 aranya.py --show-fetch 42                 # print a stored raw body
+```
+
+Open `report.html` in a browser. Tabs: claims, source heatmap, overview,
+agreement profile, geo. Filter state lives in the URL hash, so views are
+shareable. If `--with-observations` is omitted, drill-down still works but only
+lists provenance and the `--show-fetch ID` command to pull the raw body.
+
+Design rules the report follows:
+
+- **Verdicts count independent upstreams, not sources.** A claim shows both
+  `N src / M up`, and `agree`/`disagree` are computed over distinct `upstream`
+  groups (MaxMind City + ASN collapse to one upstream). Unknowns stay distinct.
+- **Failure is not disagreement.** Cell states are `agree`, `dissent`, `multi`,
+  `single`, `no_data`, `error`, `skipped`, `absent` — an outage never looks quiet.
+- **Single is not agreement.** One upstream alone gets its own state.
+- **The agreement profile measures conformity, not accuracy** — it is a
+  diversity signal, not a trust ranking.
+- **All values are hostile.** The UI only ever sets `textContent`, and the
+  embedded JSON escapes `<`, `>`, `&` (so a PTR name like `<img onerror=…>`
+  cannot execute). A test fixture covers this.
+- **Deterministic.** No timestamps in the contract except `latest_observation`,
+  derived from the data; everything is sorted; `schema_version` is present.
+
+
 
 ## Optional sources
 
