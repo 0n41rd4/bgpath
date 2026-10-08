@@ -253,6 +253,53 @@ def routeviews_prefix(body: str) -> dict:
     return {"routes": routes}
 
 
+def routeviews_announcements(body: str) -> dict:
+    routes: list[dict] = []
+    for item in _list(body):
+        if not isinstance(item, dict):
+            continue
+        announcements = []
+        for peer in item.get("reporting_peers") or []:
+            if not isinstance(peer, dict):
+                continue
+            announcements.append(
+                {
+                    "peer_asn": peer.get("peer_asn"),
+                    "peer_addr": peer.get("peer_addr"),
+                    "collector": peer.get("collector"),
+                    "as_path": peer.get("as_path"),
+                    "timestamp": peer.get("timestamp"),
+                }
+            )
+        routes.append(
+            {
+                "prefix": item.get("prefix"),
+                "origin_asn": item.get("origin_asn"),
+                "rpki_state": item.get("rpki_state"),
+                "announcements": announcements,
+            }
+        )
+    return {"routes": routes}
+
+
+def routeviews_asn(body: str) -> dict:
+    return {"prefixes": [item for item in _list(body) if isinstance(item, str)]}
+
+
+def routeviews_collector(body: str) -> dict:
+    payload = _obj(body)
+    results = payload.get("results") or []
+    first = results[0] if isinstance(results, list) and results else {}
+    return {
+        "name": first.get("name"),
+        "ipv4": first.get("ipv4"),
+        "ipv6": first.get("ipv6"),
+        "lat": _float(first.get("lat")),
+        "lng": _float(first.get("lng")),
+        "country": first.get("country"),
+    }
+
+
 def atlas_ping(body: str) -> dict:
     results: list[dict] = []
     for item in _list(body)[:25]:

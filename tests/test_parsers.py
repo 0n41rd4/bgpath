@@ -108,6 +108,26 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertEqual(best["rpki_state"], "valid")
         self.assertTrue(best["as_paths"])
 
+    def test_routeviews_announcements(self):
+        r = parsers.routeviews_announcements(load("routeviews_announcements.json"))
+        route = r["routes"][0]
+        self.assertEqual(route["prefix"], "8.8.8.0/24")
+        first = route["announcements"][0]
+        self.assertEqual(first["peer_addr"], "80.249.209.192")
+        self.assertEqual(first["peer_asn"], 2119)
+        self.assertEqual(first["as_path"], "2119 15169")
+        self.assertEqual(first["collector"], "amsix.ams")
+
+    def test_routeviews_asn(self):
+        r = parsers.routeviews_asn('["8.8.8.0/24", "8.8.4.0/24"]')
+        self.assertEqual(r["prefixes"], ["8.8.8.0/24", "8.8.4.0/24"])
+
+    def test_routeviews_collector(self):
+        r = parsers.routeviews_collector(load("routeviews_collector.json"))
+        self.assertEqual(r["name"], "amsix.ams")
+        self.assertEqual(r["ipv4"], "80.249.213.84")
+        self.assertAlmostEqual(r["lat"], 52.360607)
+
     def test_atlas_ping(self):
         r = parsers.atlas_ping(load("atlas.json"))
         self.assertTrue(r["results"])

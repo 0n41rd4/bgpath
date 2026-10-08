@@ -7,9 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import bgp
+import parsers
 import paths.enrich as enrich
 import paths.probe as probe
 import paths.store as store
+import query
 
 try:
     import paths.graph as graphlib
@@ -21,6 +24,7 @@ except Exception:
 
 FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "dublin_8.8.8.8.json"
 SCAMPER_FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "scamper_8.8.8.8.json"
+ANNOUNCE_FIXTURE = Path(__file__).parent / "fixtures" / "others" / "routeviews_announcements.json"
 
 
 def hops():
@@ -97,22 +101,32 @@ class GraphTest(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_NX, "networkx not installed")
 class EnrichTest(unittest.TestCase):
-    def test_expand_offline(self):
-        def fake(adapter_id, ip="", context=None):
-            if adapter_id == "cymru.origin":
-                return {"records": [{"asn": "15169", "prefix": "8.8.8.0/24", "country": "US"}]}
-            if adapter_id == "ripestat.asn-neighbours":
-                return {"neighbours": [{"asn": 3356, "type": "left", "power": 9}, {"asn": 174, "type": "left", "power": 8}]}
-            if adapter_id == "peeringdb.net":
-                return {"net_id": 433}
-            if adapter_id == "peeringdb.netfac":
-                return {"facilities": [{"name": "Equinix Ashburn", "city": "Ashburn", "country": "US"}]}
-            if adapter_id == "peeringdb.netixlan":
-                return {"ix": [{"name": "DE-CIX", "ix_id": 31}]}
-            raise KeyError(adapter_id)
+    def _patch(self):
+        saved = {}
 
-        original = enrich.fetch_parsed
-        enrich.fetch_parsed = fake
+        def swap(module, name, value):
+            saved[(module, name)] = getattr(module, name)
+            setattr(module, name, value)
+
+        swap(query, "asn_of", lambda ip: {"asn": "15169", "prefix": "8.8.8.0/24", "source": "cymru.origin"})
+        swap(query, "neighbours", lambda asn: [{"asn": 3356, "type": "left", "power": 9}, {"asn": 174, "type": "left", "power": 8}])
+        swap(query, "peeringdb_net", lambda asn: 433)
+        swap(query, "facilities", lambda net_id: [{"name": "Equinix Ashburn", "city": "Ashburn", "country": "US"}])
+        swap(query, "ixps", lambda net_id: [{"name": "DE-CIX", "ix_id": 31}])
+        swap(query, "fetch_parsed", lambda aid, ip="", context=None: {"routes": [{"prefix": "8.8.8.0/24", "origin_asn": 15169}]} if aid == "routeviews.prefix" else {})
+        swap(bgp, "announcements", lambda prefix: [{"prefix": prefix, "origin_asn": 15169, "announcements": [
+            {"peer_asn": 3356, "peer_addr": "80.249.209.192", "collector": "amsix.ams", "as_path": "3356 15169", "timestamp": "t"},
+            {"peer_asn": 174, "peer_addr": "80.249.209.192", "collector": "route-views.linx", "as_path": "174 15169", "timestamp": "t"},
+        ]}])
+        swap(bgp, "collector", lambda name: {"name": name, "ipv4": "80.249.213.84", "lat": 52.36, "lng": 4.89, "country": "NL"})
+        return saved
+
+    def _restore(self, saved):
+        for (module, name), value in saved.items():
+            setattr(module, name, value)
+
+    def test_expand_offline(self):
+        saved = self._patch()
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 conn = store.open_store(os.path.join(tmp, "p.db"))
@@ -121,14 +135,35 @@ class EnrichTest(unittest.TestCase):
                 counts = store.graph_counts(conn, "r1")
                 conn.close()
         finally:
-            enrich.fetch_parsed = original
+            self._restore(saved)
 
         self.assertEqual(stats["origin_edges"], 1)
-        self.assertIn("15169", stats["asns"])
         self.assertEqual(stats["as_edges"], 2)
         self.assertEqual(stats["facilities"], 1)
         self.assertEqual(stats["ixps"], 1)
-        self.assertEqual(counts["edges"]["as"]["distinct"], 2)
+        self.assertEqual(stats["sessions"]["sessions"], 2)
+        self.assertEqual(stats["sessions"]["collectors"], 2)
+        self.assertEqual(stats["aliased"]["80.249.209.192"], ["AS174", "AS3356"])
+        self.assertEqual(counts["edges"]["session"]["distinct"], 2)
+
+
+class BgpTest(unittest.TestCase):
+    def setUp(self):
+        self.routes = parsers.routeviews_announcements(ANNOUNCE_FIXTURE.read_text())["routes"]
+
+    def test_sessions(self):
+        facts = bgp.sessions(self.routes, cap=2)
+        self.assertEqual(len(facts), 2)
+        self.assertEqual(facts[0]["speaker_ip"], "80.249.209.192")
+        self.assertEqual(facts[0]["speaker_asn"], 2119)
+        self.assertEqual(facts[0]["as_path"], "2119 15169")
+
+    def test_speaker_asns(self):
+        self.assertEqual(bgp.speaker_asns(self.routes)["80.249.209.192"], {"2119"})
+
+    def test_owns(self):
+        self.assertTrue(bgp.owns("2119", "80.249.209.192", prefixes=["80.249.0.0/16"]))
+        self.assertFalse(bgp.owns("2119", "80.249.209.192", prefixes=["1.0.0.0/8"]))
 
 
 if __name__ == "__main__":

@@ -8,13 +8,44 @@ topologically: the hop at TTL *n* is joined to the next answered hop in the same
 flow, so when several flow IDs hit one router and leave via different next hops
 the result is a diamond (ECMP) rather than a line, and unanswered TTLs become
 **gap edges** instead of being collapsed away. On top of that, `paths/enrich.py`
-runs the symbiotic loop: every hop IP is queried through aranya's existing
-adapters (Cymru/RIPEstat) for its origin AS, each AS is expanded with its BGP
-neighbours (RIPEstat `asn-neighbours`) and its facilities and IXPs (PeeringDB),
-and each answer is written to its **own layer** — `origin`, `as`, `facility`,
-`ix`. So a source query never rewrites topology; it only adds nodes/edges or
-annotates them, and geographic hints (facility cities, rDNS) stay attributes,
-never coordinates baked into the graph.
+runs the symbiotic loop by calling the **source-analysis layer at the aranya
+root** (`query.py`, `bgp.py`) — not the network directly: every hop IP is
+resolved to its origin AS (Cymru/RIPEstat), each AS is expanded with its BGP
+neighbours (RIPEstat) and its facilities/IXPs (PeeringDB), and RouteViews
+announcements for the target prefix add the **announcing IP and the collector's
+own interface IP** as a real BGP **session** between two interfaces (the
+collector node carries lat/lon). Each fact is written to its **own layer** —
+`origin`, `as`, `facility`, `ix`, `session`, `collector` — so a source query
+never rewrites measured topology, only adds nodes/edges or annotates them;
+geographic hints stay attributes, never coordinates baked into the graph.
+
+**IP aliasing** (one IP used by more than one router/AS) is recorded as an
+`aliased_asns` attribute on the interface node: it shows up whenever a hop or an
+announcing IP is attributed to more than one AS. This is the AS-level signal;
+once alias resolution (merging interfaces into machines) lands, the
+interface-level case will be detected too.
+
+## Layers
+
+| Layer | Node | Edge | Source |
+|---|---|---|---|
+| `interface` | hop IP / announcing IP | hop → next hop (measured) | trace |
+| `origin` | `AS<asn>` | interface → AS | Cymru / RIPEstat / RouteViews |
+| `as` | `AS<neighbour>` | AS → AS | RIPEstat `asn-neighbours` |
+| `session` | — | announcing IP → collector | RouteViews `reporting_peers` |
+| `collector` | `COL:<name>` (interface IP + lat/lon) | — | RouteViews `/collector` |
+| `facility` | `FAC:<name>` | AS → facility | PeeringDB `netfac` |
+| `ix` | `IX:<id>` | AS → IX | PeeringDB `netixlan` |
+
+## Source-analysis boundary
+
+Reusable source work lives at the aranya root and is imported by `paths/`:
+- `query.py` — generic adapter queries (`fetch_parsed`, `asn_of`, `neighbours`, PeeringDB).
+- `bgp.py` — BGP facts: `announcements`, `prefixes_for_asn`, `owns`, `sessions`, `speaker_asns`.
+
+`paths/` keeps only measurement (`probe.py`), graph construction (`graph.py`,
+alias/ECMP/gap), persistence (`store.py`), and the graph-mutation glue
+(`enrich.py`).
 
 ## Usage
 

@@ -73,7 +73,17 @@ def cmd_trace(args) -> int:
             f"  enriched: {stats['origin_edges']} origin edges, {stats['as_edges']} AS edges, "
             f"{stats['facilities']} facilities, {stats['ixps']} IXPs, {len(stats['asns'])} ASes"
         )
-        print(f"  ASes: {', '.join(stats['asns'])}")
+        sessions = stats["sessions"]
+        print(
+            f"  BGP sessions: {sessions['sessions']} over {sessions['collectors']} collectors "
+            f"(prefix {sessions['prefix']})"
+        )
+        if stats["aliased"]:
+            print(f"  IP aliasing (one IP, >1 AS):")
+            for ip, asns in stats["aliased"].items():
+                print(f"    {ip} -> {', '.join(asns)}")
+        else:
+            print("  IP aliasing: none observed")
 
     conn.close()
     return 0
@@ -103,7 +113,7 @@ def cmd_topology(args) -> int:
     rows = conn.execute(
         "SELECT layer, src, dst, ttl, count, min_rtt_ms FROM edges WHERE run_id = ? "
         "ORDER BY CASE layer WHEN 'interface' THEN 0 WHEN 'origin' THEN 1 WHEN 'as' THEN 2 "
-        "WHEN 'facility' THEN 3 WHEN 'ix' THEN 4 ELSE 5 END, src, dst",
+        "WHEN 'session' THEN 3 WHEN 'collector' THEN 4 WHEN 'facility' THEN 5 WHEN 'ix' THEN 6 ELSE 7 END, src, dst",
         (args.run_id,),
     ).fetchall()
     if not rows:
