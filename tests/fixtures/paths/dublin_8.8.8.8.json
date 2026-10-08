@@ -1,0 +1,1048 @@
+{
+	"flows" : 
+	{
+		"33434" : 
+		[
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "_gateway",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 1779,
+						"src" : "192.168.1.254",
+						"ttl" : 64
+					},
+					"timestamp" : "1791478711.875908"
+				},
+				"rtt_usec" : 5404,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 1
+					},
+					"timestamp" : "1791478711.870504",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "reverso.190.215.80.operaciones.gtdinternet.com",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 19286,
+						"src" : "190.215.80.1",
+						"ttl" : 63
+					},
+					"timestamp" : "1791478711.891162"
+				},
+				"rtt_usec" : 5538,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 2
+					},
+					"timestamp" : "1791478711.885624",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "",
+				"received" : null,
+				"rtt_usec" : null,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 3
+					},
+					"timestamp" : "1791478711.896561",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				}
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "",
+				"received" : null,
+				"rtt_usec" : null,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 4
+					},
+					"timestamp" : "1791478711.908373",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				}
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "cn2.ae5.200.agre2MQ.gtdinternet.com",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "190.196.124.214",
+						"ttl" : 251
+					},
+					"timestamp" : "1791478711.928840"
+				},
+				"rtt_usec" : 8867,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 5
+					},
+					"timestamp" : "1791478711.919973",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "72.14.194.218",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "72.14.194.218",
+						"ttl" : 250
+					},
+					"timestamp" : "1791478711.939009"
+				},
+				"rtt_usec" : 8488,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 6
+					},
+					"timestamp" : "1791478711.930521",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "142.250.63.61",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 59355,
+						"src" : "142.250.63.61",
+						"ttl" : 56
+					},
+					"timestamp" : "1791478711.954368"
+				},
+				"rtt_usec" : 10209,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 7
+					},
+					"timestamp" : "1791478711.944159",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : false,
+				"name" : "142.251.247.217",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 43207,
+						"src" : "142.251.247.217",
+						"ttl" : 55
+					},
+					"timestamp" : "1791478711.965130"
+				},
+				"rtt_usec" : 10170,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 8
+					},
+					"timestamp" : "1791478711.954960",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25516,
+				"is_last" : true,
+				"name" : "dns.google",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 3,
+						"description" : "Destination port unreachable",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 3
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "8.8.8.8",
+						"ttl" : 117
+					},
+					"timestamp" : "1791478711.975301"
+				},
+				"rtt_usec" : 6048,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 9
+					},
+					"timestamp" : "1791478711.969253",
+					"udp" : 
+					{
+						"dport" : 33434,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			}
+		],
+		"33435" : 
+		[
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "_gateway",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 1780,
+						"src" : "192.168.1.254",
+						"ttl" : 64
+					},
+					"timestamp" : "1791478712.16547"
+				},
+				"rtt_usec" : 2826,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 1
+					},
+					"timestamp" : "1791478712.13721",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "reverso.190.215.80.operaciones.gtdinternet.com",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 19411,
+						"src" : "190.215.80.1",
+						"ttl" : 63
+					},
+					"timestamp" : "1791478712.31791"
+				},
+				"rtt_usec" : 7235,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 2
+					},
+					"timestamp" : "1791478712.24556",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "",
+				"received" : null,
+				"rtt_usec" : null,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 3
+					},
+					"timestamp" : "1791478712.35313",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				}
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "192.168.50.12",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "192.168.50.12",
+						"ttl" : 252
+					},
+					"timestamp" : "1791478712.58663"
+				},
+				"rtt_usec" : 12398,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 4
+					},
+					"timestamp" : "1791478712.46265",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "cn2.ae5.200.agre2MQ.gtdinternet.com",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "190.196.124.214",
+						"ttl" : 251
+					},
+					"timestamp" : "1791478712.63853"
+				},
+				"rtt_usec" : 7038,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 5
+					},
+					"timestamp" : "1791478712.56815",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "72.14.194.218",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "72.14.194.218",
+						"ttl" : 250
+					},
+					"timestamp" : "1791478712.74048"
+				},
+				"rtt_usec" : 6671,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 6
+					},
+					"timestamp" : "1791478712.67377",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "192.178.99.51",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 62946,
+						"src" : "192.178.99.51",
+						"ttl" : 56
+					},
+					"timestamp" : "1791478712.84246"
+				},
+				"rtt_usec" : 5104,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 7
+					},
+					"timestamp" : "1791478712.79142",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : false,
+				"name" : "142.251.247.223",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 24823,
+						"src" : "142.251.247.223",
+						"ttl" : 55
+					},
+					"timestamp" : "1791478712.101009"
+				},
+				"rtt_usec" : 11272,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 8
+					},
+					"timestamp" : "1791478712.89737",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25517,
+				"is_last" : true,
+				"name" : "dns.google",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 3,
+						"description" : "Destination port unreachable",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 3
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "8.8.8.8",
+						"ttl" : 117
+					},
+					"timestamp" : "1791478712.106098"
+				},
+				"rtt_usec" : 5751,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 9
+					},
+					"timestamp" : "1791478712.100347",
+					"udp" : 
+					{
+						"dport" : 33435,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			}
+		],
+		"33436" : 
+		[
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "_gateway",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 1781,
+						"src" : "192.168.1.254",
+						"ttl" : 64
+					},
+					"timestamp" : "1791478712.155832"
+				},
+				"rtt_usec" : 9742,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 1
+					},
+					"timestamp" : "1791478712.146090",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "reverso.190.215.80.operaciones.gtdinternet.com",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 19535,
+						"src" : "190.215.80.1",
+						"ttl" : 63
+					},
+					"timestamp" : "1791478712.166767"
+				},
+				"rtt_usec" : 10138,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 2
+					},
+					"timestamp" : "1791478712.156629",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "",
+				"received" : null,
+				"rtt_usec" : null,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 3
+					},
+					"timestamp" : "1791478712.167435",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				}
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "",
+				"received" : null,
+				"rtt_usec" : null,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 4
+					},
+					"timestamp" : "1791478712.178030",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				}
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "cn2.ae5.200.agre2MQ.gtdinternet.com",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "190.196.124.214",
+						"ttl" : 251
+					},
+					"timestamp" : "1791478712.193105"
+				},
+				"rtt_usec" : 4516,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 5
+					},
+					"timestamp" : "1791478712.188589",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "72.14.194.218",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "72.14.194.218",
+						"ttl" : 250
+					},
+					"timestamp" : "1791478712.206087"
+				},
+				"rtt_usec" : 6854,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 6
+					},
+					"timestamp" : "1791478712.199233",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "192.178.99.51",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 62978,
+						"src" : "192.178.99.51",
+						"ttl" : 56
+					},
+					"timestamp" : "1791478712.216410"
+				},
+				"rtt_usec" : 6635,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 7
+					},
+					"timestamp" : "1791478712.209775",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : false,
+				"name" : "142.251.247.219",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 11,
+						"description" : "TTL expired in transit",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 0
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 52102,
+						"src" : "142.251.247.219",
+						"ttl" : 55
+					},
+					"timestamp" : "1791478712.232915"
+				},
+				"rtt_usec" : 10346,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 8
+					},
+					"timestamp" : "1791478712.222569",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			},
+			{
+				"flowhash" : 25518,
+				"is_last" : true,
+				"name" : "dns.google",
+				"nat_id" : 0,
+				"received" : 
+				{
+					"icmp" : 
+					{
+						"code" : 3,
+						"description" : "Destination port unreachable",
+						"extensions" : [],
+						"mpls_labels" : [],
+						"type" : 3
+					},
+					"ip" : 
+					{
+						"dst" : "192.168.1.15",
+						"id" : 0,
+						"src" : "8.8.8.8",
+						"ttl" : 117
+					},
+					"timestamp" : "1791478712.238003"
+				},
+				"rtt_usec" : 4867,
+				"sent" : 
+				{
+					"ip" : 
+					{
+						"dst" : "8.8.8.8",
+						"src" : "192.168.1.15",
+						"ttl" : 9
+					},
+					"timestamp" : "1791478712.233136",
+					"udp" : 
+					{
+						"dport" : 33436,
+						"sport" : 12345
+					}
+				},
+				"zerottl_forwarding_bug" : false
+			}
+		]
+	}
+}
