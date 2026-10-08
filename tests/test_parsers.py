@@ -99,6 +99,29 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertEqual(r["name"], "Google LLC")
         self.assertEqual(r["country"], "US")
 
+    def test_routeviews_prefix(self):
+        r = parsers.routeviews_prefix(load("routeviews_prefix.json"))
+        prefixes = [route["prefix"] for route in r["routes"]]
+        self.assertEqual(prefixes, ["8.8.8.0/24", "8.0.0.0/12", "0.0.0.0/0"])
+        best = r["routes"][0]
+        self.assertEqual(best["origin_asn"], 15169)
+        self.assertEqual(best["rpki_state"], "valid")
+        self.assertTrue(best["as_paths"])
+
+    def test_atlas_ping(self):
+        r = parsers.atlas_ping(load("atlas.json"))
+        self.assertTrue(r["results"])
+        first = r["results"][0]
+        self.assertIsInstance(first["prb_id"], int)
+        self.assertIsInstance(first["avg_rtt"], float)
+
+    def test_irr(self):
+        r = parsers.irr(load("irr.txt"))
+        self.assertTrue(r["objects"])
+        first = r["objects"][0]
+        self.assertEqual(first["prefix"], "8.8.8.0/24")
+        self.assertEqual(first["origin"], "AS15169")
+
 
 class ToleranceTest(unittest.TestCase):
     def test_non_dict(self):

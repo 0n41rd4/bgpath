@@ -134,7 +134,7 @@ def print_summary(conn, ip: str) -> None:
 
 
 def print_comparison(conn, ip: str) -> None:
-    marks = {"agree": "=", "disagree": "!", "spread": "~"}
+    marks = {"agree": "=", "single": "·", "disagree": "!", "spread": "~"}
     print("\ncomparison:")
     for row in compare.summarize(conn, ip):
         mark = marks[row["verdict"]]

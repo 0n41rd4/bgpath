@@ -234,6 +234,74 @@ def ipguide(body: str) -> dict:
     }
 
 
+def routeviews_prefix(body: str) -> dict:
+    routes: list[dict] = []
+    for item in _list(body):
+        if not isinstance(item, dict):
+            continue
+        peers = [peer for peer in item.get("reporting_peers") or [] if isinstance(peer, dict)]
+        routes.append(
+            {
+                "prefix": item.get("prefix"),
+                "origin_asn": item.get("origin_asn"),
+                "rpki_state": item.get("rpki_state"),
+                "peers": len(peers),
+                "collectors": sorted({peer.get("collector") for peer in peers if peer.get("collector")}),
+                "as_paths": sorted({peer.get("as_path") for peer in peers if peer.get("as_path")}),
+            }
+        )
+    return {"routes": routes}
+
+
+def atlas_ping(body: str) -> dict:
+    results: list[dict] = []
+    for item in _list(body)[:25]:
+        if not isinstance(item, dict):
+            continue
+        results.append(
+            {
+                "prb_id": item.get("prb_id"),
+                "from": item.get("from"),
+                "avg_rtt": item.get("avg"),
+                "min_rtt": item.get("min"),
+                "max_rtt": item.get("max"),
+                "sent": item.get("sent"),
+                "rcvd": item.get("rcvd"),
+                "timestamp": item.get("timestamp"),
+            }
+        )
+    return {"results": results}
+
+
+def irr(body: str) -> dict:
+    objects: list[dict] = []
+    current: dict = {}
+    for line in body.splitlines():
+        if not line.strip():
+            if current:
+                objects.append(current)
+                current = {}
+            continue
+        if line[0] in " \t#%":
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower()
+        value = value.strip()
+        if key in ("route", "route6"):
+            current.setdefault("prefix", value)
+        elif key == "origin":
+            current.setdefault("origin", value)
+        elif key == "descr":
+            current.setdefault("descr", value)
+        elif key == "source":
+            current.setdefault("source", value)
+    if current:
+        objects.append(current)
+    return {"objects": objects}
+
+
 def _float(text: str) -> float | None:
     try:
         return float(text)

@@ -31,6 +31,12 @@ def make_fetch():
             body = (RIPE / "ipmap.json").read_text()
         elif "cymru" in url:
             body = (OTHERS / "cymru.json").read_text()
+        elif "api.routeviews.org" in url:
+            body = (OTHERS / "routeviews_prefix.json").read_text()
+        elif "atlas.ripe.net" in url:
+            body = (OTHERS / "atlas.json").read_text()
+        elif url.startswith("IRR "):
+            body = (OTHERS / "irr.txt").read_text()
         elif "rdap" in url:
             body = (OTHERS / "rdap.json").read_text()
         elif "ipwho.is" in url:
@@ -78,6 +84,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(parsed["ripestat.network-info"]["asns"], ["15169"])
         self.assertEqual(parsed["peeringdb.net"]["net_id"], 433)
         self.assertEqual(parsed["rdns.ptr"]["hostname"], "dns.google")
+        self.assertEqual(parsed["routeviews.prefix"]["routes"][0]["origin_asn"], 15169)
+        self.assertEqual(parsed["atlas.ping"]["results"][0]["prb_id"], 1002934)
+        self.assertEqual(parsed["irr.origin"]["objects"][0]["origin"], "AS15169")
 
     def test_optional_sources_configured(self):
         env = {"IPINFO_TOKEN": "test-token", "SHODAN_API_KEY": "test-key"}

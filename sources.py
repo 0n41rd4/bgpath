@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import time
 import urllib.error
@@ -21,6 +22,8 @@ import ripe
 TIMEOUT = 20
 USER_AGENT = "aranya/0.0"
 GLOBALPING_URL = "https://api.globalping.io/v1/measurements"
+ATLAS_MEASUREMENTS_URL = "https://atlas.ripe.net/api/v2/measurements/"
+ATLAS_RESULTS_URL = "https://atlas.ripe.net/api/v2/measurements/{mid}/results/"
 
 
 def http_get(url: str, timeout: int = TIMEOUT, retries: int = 2) -> tuple[int | None, str | None, str | None]:
@@ -86,6 +89,61 @@ def _fetch_globalping(ip: str, ctx: dict) -> tuple[int | None, str | None, str |
         except ValueError:
             return status, body, "bad result body"
     return None, None, "globalping polling timed out"
+
+
+def _fetch_atlas(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:
+    status, body, error = http_get(
+        f"{ATLAS_MEASUREMENTS_URL}?target_ip={ip}&type=ping&status=2&page_size=50"
+    )
+    if error:
+        return status, body, error
+    try:
+        measurements = json.loads(body).get("results") or []
+    except ValueError:
+        return status, body, "bad measurement list"
+    if not measurements:
+        return None, None, "no public ping measurement for this IP"
+    now = int(time.time())
+    ordered = sorted(measurements, key=lambda m: m.get("creation_time") or 0, reverse=True)
+    for measurement in ordered[:10]:
+        mid = measurement.get("id")
+        if mid is None:
+            continue
+        url = f"{ATLAS_RESULTS_URL.format(mid=mid)}?format=json&start={now - 3600}&stop={now}"
+        rstatus, rbody, rerror = http_get(url)
+        if rerror:
+            continue
+        try:
+            results = json.loads(rbody)
+        except ValueError:
+            continue
+        if isinstance(results, list) and any(
+            isinstance(item, dict) and (item.get("timestamp") or 0) >= now - 3600
+            for item in results
+        ):
+            return rstatus, rbody, None
+    return None, None, "no recent Atlas ping results"
+
+
+def _fetch_irr(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:
+    prefix = ctx.get("prefix")
+    if not prefix:
+        return None, None, "no prefix for IRR lookup"
+    try:
+        conn = socket.create_connection(("whois.radb.net", 43), timeout=TIMEOUT)
+        conn.sendall(f"-T route {prefix}\r\n".encode())
+        chunks: list[bytes] = []
+        total = 0
+        while total < 262144:
+            chunk = conn.recv(8192)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        conn.close()
+        return 200, b"".join(chunks).decode("utf-8", "replace"), None
+    except Exception as exc:
+        return None, None, str(exc)
 
 
 def _reverse(ip: str) -> str:
@@ -249,6 +307,73 @@ def _globalping_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("latency", "probe", result) for result in parsed["results"]]
 
 
+def _best_route(parsed: dict) -> dict:
+    best: dict = {}
+    best_length = -1
+    for route in parsed.get("routes") or []:
+        prefix = route.get("prefix") or ""
+        if "/" not in prefix:
+            continue
+        try:
+            length = int(prefix.split("/")[1])
+        except ValueError:
+            continue
+        if length > best_length:
+            best_length = length
+            best = route
+    return best
+
+
+def _routeviews_provides(parsed: dict) -> dict:
+    best = _best_route(parsed)
+    return {"asn": best.get("origin_asn"), "prefix": best.get("prefix")}
+
+
+def _routeviews_obs(ip: str, parsed: dict) -> list[dict]:
+    best = _best_route(parsed)
+    obs: list[dict] = []
+    if best.get("origin_asn") is not None:
+        obs.append(_obs("ownership", "asn", str(best["origin_asn"])))
+    if best.get("prefix"):
+        obs.append(_obs("ownership", "prefix", best["prefix"]))
+    if best.get("rpki_state"):
+        obs.append(_obs("routing", "rpki", best["rpki_state"]))
+    return obs
+
+
+def _atlas_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs(
+            "latency",
+            "probe",
+            {
+                "prb_id": result.get("prb_id"),
+                "avg_rtt": result.get("avg_rtt"),
+                "min_rtt": result.get("min_rtt"),
+                "max_rtt": result.get("max_rtt"),
+            },
+        )
+        for result in parsed["results"]
+    ]
+
+
+def _irr_obs(ip: str, parsed: dict) -> list[dict]:
+    origins: set[str] = set()
+    names: set[str] = set()
+    for obj in parsed["objects"]:
+        origin = obj.get("origin")
+        if origin:
+            match = re.search(r"\d+", origin)
+            if match:
+                origins.add(match.group())
+        descr = obj.get("descr")
+        if descr and not obj.get("source", "").strip().upper().startswith("RPKI"):
+            names.add(descr)
+    obs = [_obs("ownership", "asn", origin) for origin in sorted(origins)]
+    obs += [_obs("ownership", "name", name) for name in sorted(names)]
+    return obs
+
+
 def _peeringdb_net_obs(ip: str, parsed: dict) -> list[dict]:
     return [
         _obs("directory", "net_id", parsed["net_id"]),
@@ -386,6 +511,27 @@ SOURCES: list[dict] = [
         },
     },
     {
+        "id": "routeviews.prefix",
+        "upstream": "RouteViews",
+        "evidence_class": "observed-passive",
+        "needs": [],
+        "url": lambda ctx: f"https://api.routeviews.org/prefix/{ctx['ip']}/32",
+        "parse": parsers.routeviews_prefix,
+        "observations": _routeviews_obs,
+        "provides": _routeviews_provides,
+    },
+    {
+        "id": "irr.origin",
+        "upstream": "IRR (RADb)",
+        "evidence_class": "reported",
+        "needs": ["prefix"],
+        "url": lambda ctx: f"IRR route {ctx['prefix']}",
+        "fetch": _fetch_irr,
+        "parse": parsers.irr,
+        "observations": _irr_obs,
+        "provides": lambda parsed: {},
+    },
+    {
         "id": "rdap",
         "upstream": "RIR",
         "evidence_class": "reported",
@@ -445,6 +591,17 @@ SOURCES: list[dict] = [
         "fetch": _fetch_globalping,
         "parse": parsers.globalping,
         "observations": _globalping_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "atlas.ping",
+        "upstream": "RIPE Atlas",
+        "evidence_class": "observed-active",
+        "needs": [],
+        "url": lambda ctx: f"{ATLAS_MEASUREMENTS_URL}?target_ip={ctx['ip']}&type=ping&status=2&page_size=50",
+        "fetch": _fetch_atlas,
+        "parse": parsers.atlas_ping,
+        "observations": _atlas_obs,
         "provides": lambda parsed: {},
     },
     {
