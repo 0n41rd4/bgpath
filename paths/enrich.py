@@ -45,7 +45,7 @@ def target_prefix(graph) -> str | None:
     try:
         routes = query.fetch_parsed("routeviews.prefix", ip)["routes"]
     except Exception:
-        return None
+        routes = []
     best, best_length = None, -1
     for route in routes:
         prefix = route.get("prefix") or ""
@@ -56,7 +56,10 @@ def target_prefix(graph) -> str | None:
                 continue
             if length > best_length:
                 best, best_length = route, length
-    return best.get("prefix") if best else None
+    if best:
+        return best.get("prefix")
+    info = query.asn_of(ip)
+    return info.get("prefix") if info else None
 
 
 def _add_origin(conn, run_id, graph, ip, asn, source, prefix=None):
