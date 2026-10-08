@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 import time
 
 import compare
 import observe
+import render
 import sources
 import store
+import views
 
 DEFAULT_DB = "aranya.db"
 
@@ -137,11 +141,33 @@ def print_comparison(conn, ip: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
-    parser.add_argument("ip", help="IP address to look up")
+    parser.add_argument("ip", nargs="?", help="IP address to look up")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
+    parser.add_argument("--view", action="store_true", help="render the claim view for IP (no fetch)")
+    parser.add_argument("--report", action="store_true", help="cross-IP overview + source profile")
+    parser.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     args = parser.parse_args(argv)
 
+    color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
     conn = store.open_store(args.db)
+
+    if args.report:
+        ips = views.ips(conn)
+        print("\n".join(render.overview_view(conn, ips, color)))
+        print("\n".join(render.profile_view(conn, ips, color)))
+        conn.close()
+        return 0
+
+    if args.view:
+        if not args.ip:
+            parser.error("--view needs an IP")
+        print("\n".join(render.claim_view(conn, args.ip, color)))
+        conn.close()
+        return 0
+
+    if not args.ip:
+        parser.error("an IP is required (or use --report)")
+
     statuses, _ = run_all(conn, args.ip)
 
     print(f"aranya {args.ip}\n")

@@ -13,8 +13,59 @@ claims in the `observations` table.
 
 ```sh
 python3 aranya.py 8.8.8.8 [--db FILE]          # fetch all sources, print observations
-python3 -m unittest discover -s tests          # 34 tests, fully offline
+python3 -m unittest discover -s tests          # 45 tests, fully offline
 ```
+
+## Views
+
+Disagreement is the signal, not an error: the views keep every source's claim
+side by side and rank them rather than collapsing to one answer.
+
+```sh
+python3 aranya.py 8.8.8.8 --view               # per-IP claims (no fetch)
+python3 aranya.py --report                     # cross-IP overview + source profile
+```
+
+`--view` prints one block per `topic.key`, coloured by claim: the consensus
+value first, then dissenters, then any source that reports a *set* (marked `*`):
+
+```
+location.claim                [!] disagree   5 source(s)
+    ● 37.751,-97.822                     maxmind.geolite2, ripestat.geoloc
+    ◆ Mountain View, US                  dbip.lite, ipinfo
+    ~ ipmap*                             30 values: Amsterdam, Netherlands, …
+
+ownership.name                [!] disagree   2 source(s)
+    ● GOGL                               rdap
+    ◆ Google LLC                         peeringdb.net
+```
+
+`--report` shows, for every IP in the DB, the verdict per claim, plus a
+per-source track record against each cell's consensus:
+
+```
+overview:  per-IP agreement per claim
+
+           own.asn own.nam loc.clm idn.hst ...
+     8.8.8.8    .       #       #       .
+     1.1.1.1    .       #       #       #
+
+legend: . agree  + spread  # disagree   · absent
+
+source profile:  agreement with each cell's consensus
+
+source                   cells  agree  dissent  multi
+rdap                        17     17        0      0
+ipinfo                      13      9        4      0
+ripestat.geoloc              4      4        0      0
+```
+
+Colour is auto-detected; disable with `--no-color` or `NO_COLOR`.
+
+Internals: `views.py` holds read-only projections over the existing tables,
+`aggregate.py` turns those rows into labelled claims / consensus / profiles, and
+`render.py` draws them. Nothing here writes to the store.
+
 
 ## Optional sources
 
