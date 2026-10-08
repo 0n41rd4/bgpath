@@ -11,6 +11,7 @@ import argparse
 import time
 
 import paths.enrich as enrich
+import paths.export as paths_export
 import paths.graph as graphlib
 import paths.probe as probe
 import paths.store as store
@@ -132,6 +133,25 @@ def cmd_topology(args) -> int:
     return 0
 
 
+def cmd_html(args) -> int:
+    conn = store.open_store(args.db)
+    run_id = args.run_id
+    if not run_id:
+        row = conn.execute("SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        if not row:
+            print("no runs")
+            conn.close()
+            return 1
+        run_id = row[0]
+    html = paths_export.render_html(conn, run_id)
+    out = args.output or f"{run_id.replace('@', '_').replace(':', '')}.html"
+    with open(out, "w") as handle:
+        handle.write(html)
+    print(f"wrote {out}  ({len(html)} bytes)")
+    conn.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="paths", description="path & topology exploration")
     parser.add_argument("--db", default=DEFAULT_DB)
@@ -152,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
     topo = sub.add_parser("topology", help="print edges for a run")
     topo.add_argument("run_id")
     topo.set_defaults(func=cmd_topology)
+
+    html = sub.add_parser("html", help="render the graph as self-contained HTML")
+    html.add_argument("run_id", nargs="?")
+    html.add_argument("-o", "--output")
+    html.set_defaults(func=cmd_html)
 
     args = parser.parse_args(argv)
     return args.func(args)

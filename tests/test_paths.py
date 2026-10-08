@@ -11,6 +11,7 @@ import bgp
 import parsers
 import paths.alias as alias
 import paths.enrich as enrich
+import paths.export as paths_export
 import paths.probe as probe
 import paths.store as store
 import query
@@ -185,6 +186,26 @@ class AliasTest(unittest.TestCase):
 
     def test_machine_key_stable(self):
         self.assertEqual(alias.machine_key(["b", "a"]), alias.machine_key(["a", "b"]))
+
+
+class ExportTest(unittest.TestCase):
+    def test_build_and_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            store.save_run(conn, {"run_id": "r1", "target": "8.8.8.8", "src_ip": "1.2.3.4", "tool": "scamper", "started_at": "t"})
+            store.add_node(conn, "interface", "8.8.8.8")
+            store.add_node(conn, "as", "AS15169", {"asn": "15169"})
+            store.add_edge(conn, "r1", "origin", "8.8.8.8", "AS15169", attrs={"source_url": "https://stat.ripe.net/8.8.8.8"})
+            data = paths_export.build(conn, "r1")
+            html = paths_export.render_html(conn, "r1")
+            conn.close()
+
+        self.assertEqual(len(data["nodes"]), 2)
+        self.assertEqual(len(data["edges"]), 1)
+        self.assertTrue(all("x" in node and "y" in node for node in data["nodes"]))
+        self.assertEqual(data["edges"][0]["source_url"], "https://stat.ripe.net/8.8.8.8")
+        self.assertNotIn("/*__PATHS_DATA__*/", html)
+        self.assertIn("AS15169", html)
 
 
 if __name__ == "__main__":
