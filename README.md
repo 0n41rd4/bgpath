@@ -5,15 +5,17 @@ the full brief.
 
 ## Status
 
-Phase 1 (fetch layer + raw store + observations). 14 always-on sources query an
-IP in dependency waves; raw responses land in the `fetches` table, normalized
-claims in the `observations` table.
+Phase 1 (fetch + raw store + observations), phase 2 (comparison + HTML report),
+phase 3 (more sources), phase 4 (entity normalization) and phase 5 (cross-IP
+analysis) are implemented. 16 always-on sources + 5 optional query an IP in
+dependency waves; raw responses land in the `fetches` table, normalized claims
+in the `observations` table.
 
 ## Usage
 
 ```sh
 python3 aranya.py 8.8.8.8 [--db FILE]          # fetch all sources, print observations
-python3 -m unittest discover -s tests          # 45 tests, fully offline
+python3 -m unittest discover -s tests          # 67 tests, fully offline
 ```
 
 ## Views
@@ -23,7 +25,11 @@ side by side and rank them rather than collapsing to one answer.
 
 ```sh
 python3 aranya.py 8.8.8.8 --view               # per-IP claims (no fetch)
-python3 aranya.py --report                     # cross-IP overview + source profile
+python3 aranya.py 8.8.8.8 --view --normalize   # same, comparing canonical values
+python3 aranya.py 8.8.8.8 --entities           # resolved ownership entity + aliases
+python3 aranya.py --report                     # cross-IP overview + agreement profile
+python3 aranya.py --stats                      # cross-IP analysis (contested claims, anycast, sources)
+python3 aranya.py --stats 8.8.8.8              # analysis scoped to one IP
 ```
 
 `--view` prints one block per `topic.key`, coloured by claim: the consensus
@@ -65,6 +71,24 @@ Colour is auto-detected; disable with `--no-color` or `NO_COLOR`.
 Internals: `views.py` holds read-only projections over the existing tables,
 `aggregate.py` turns those rows into labelled claims / consensus / profiles, and
 `render.py` draws them. Nothing here writes to the store.
+
+## Entity normalization
+
+`entities.py` canonicalises values without touching the raw store: ASN to int
+(`AS15169` → `15169`), country to ISO-2, prefix to CIDR, range normalised, org
+names stripped of `AS<n>` prefixes and legal suffixes. `--view --normalize`
+compares these canonical values, so formatting-only disagreements vanish.
+
+`entities.resolve()` anchors name aliases to the ASN the same source reports,
+then folds in unlinked names whose canonical form matches a known entity — so
+`"AS15169 Google LLC"`, `"GOOGLE - Google LLC"` and PeeringDB's `"Google LLC"`
+all resolve to `AS15169`, while RIR's `"GOGL"` stays separate.
+
+## Cross-IP analysis
+
+`analyze.py` reduces the whole store to patterns (`--stats`): verdict
+distribution, per-claim contested rate, anycast-like sources (one source
+enriching many location claims), and per-source conformity.
 
 ## HTML report
 
