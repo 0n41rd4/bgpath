@@ -279,6 +279,8 @@ def build(conn, run_id: str) -> dict:
                 "count": edge["count"],
                 "min_rtt_ms": edge["min_rtt_ms"],
                 "ttl": edge["ttl"],
+                "protocols": edge["attrs"].get("protocols") or [],
+                "tools": edge["attrs"].get("tools") or [],
                 "from_as": a_as,
                 "to_as": b_as,
                 "handoff": handoff,
@@ -331,6 +333,8 @@ def build(conn, run_id: str) -> dict:
                 "ttl_return_hops": entry["return_hops"] if entry else None,
                 "ttl_confidence": confidence,
                 "ttl_reasons": reasons,
+                "protocols": attrs.get("protocols") or [],
+                "tools": attrs.get("tools") or [],
                 "attrs": attrs,
                 "source_url": attrs.get("source_url") or f"https://stat.ripe.net/{ip}",
             }

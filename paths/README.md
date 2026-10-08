@@ -127,6 +127,35 @@ alias/ECMP/gap), persistence (`store.py`), and the graph-mutation glue
 building (installed in the venv); without it the probe/store/enrich tests still
 run.
 
+## Many tools, one graph
+
+A single tool sees one slice of the path. Run several protocols/tools and let them
+aggregate: identical adjacencies collapse into one edge carrying the union of
+`flows`, `protocols` and `tools`, so the graph grows without becoming redundant.
+
+Built-in multi-protocol scamper (Paris), one run:
+
+```sh
+.venv/bin/python -m paths --db paths.db trace 8.8.8.8 --protocols udp,icmp,tcp --flows 3 --enrich
+```
+
+External tools, ingested into the same run (`--run-id` appends, rebuilding the
+interface layer from all hops):
+
+```sh
+mtr -j -c 5 8.8.8.8 > mtr.json
+traceroute -n 8.8.8.8 > tr.txt
+.venv/bin/python -m paths --db paths.db ingest mtr.json --tool mtr        --protocol icmp --run-id <id>
+.venv/bin/python -m paths --db paths.db ingest tr.txt  --tool traceroute --protocol udp  --run-id <id>
+```
+
+`--tool` accepts `mtr` (JSON), `traceroute` (text), `scamper` (JSON lines) and
+`dublin` (JSON). Tools worth installing, each adding a different vantage on
+ECMP/middleboxes: `mtr`, `traceroute`, `paris-traceroute`, `tracebox`, `hping3`,
+`nping`; `scamper` and `dublin-traceroute` are already used. Different protocols
+routinely take different paths (e.g. ICMP vs UDP to 8.8.8.8 hit different Google
+edges), which is exactly the signal aggregation exposes.
+
 ## Testing & rate limits
 
 Repeated runs would hammer RIPEstat / PeeringDB / RouteViews, so source-analysis

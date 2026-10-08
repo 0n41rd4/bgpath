@@ -13,6 +13,7 @@ import paths.alias as alias
 import paths.analysis as analysis
 import paths.enrich as enrich
 import paths.export as paths_export
+import paths.ingest as ingest
 import paths.probe as probe
 import paths.store as store
 import query
@@ -197,6 +198,45 @@ class AnalysisTest(unittest.TestCase):
         self.assertFalse(analysis.same_place(santiago, miami)[0])
         self.assertTrue(analysis.facility_matches_place({"city": "Santiago", "country": "CL"}, santiago))
         self.assertFalse(analysis.facility_matches_place({"city": "Miami", "country": "US"}, santiago))
+
+
+class IngestTest(unittest.TestCase):
+    def test_parse_mtr(self):
+        payload = {"report": {"hubs": [
+            {"count": 1, "host": "192.168.1.1", "Avg": 0.5},
+            {"count": 2, "host": "???", "Avg": 0.0},
+            {"count": 3, "host": "8.8.8.8", "Avg": 5.0},
+        ]}}
+        hops = ingest.parse_mtr(payload)
+        self.assertEqual([h["ttl"] for h in hops], [1, 2, 3])
+        self.assertEqual(hops[0]["src_ip"], "192.168.1.1")
+        self.assertIsNone(hops[1]["src_ip"])
+        self.assertEqual(hops[0]["tool"], "mtr")
+        self.assertEqual(hops[0]["protocol"], "icmp")
+
+    def test_parse_traceroute(self):
+        text = "traceroute to 8.8.8.8\n 1  _gateway (192.168.1.1)  0.532 ms  0.4 ms\n 2  * * *\n 3  8.8.8.8  5.1 ms\n"
+        hops = ingest.parse_traceroute(text, protocol="udp")
+        self.assertEqual([h["ttl"] for h in hops], [1, 2, 3])
+        self.assertEqual(hops[0]["src_ip"], "192.168.1.1")
+        self.assertEqual(hops[0]["name"], "_gateway")
+        self.assertAlmostEqual(hops[0]["rtt_ms"], 0.532)
+        self.assertIsNone(hops[1]["src_ip"])
+        self.assertEqual(hops[2]["src_ip"], "8.8.8.8")
+
+    @unittest.skipUnless(HAVE_NX, "networkx not installed")
+    def test_provenance_merges(self):
+        hops = [
+            {"flow_id": 1, "ttl": 1, "src_ip": "a", "rtt_ms": 1.0, "protocol": "udp", "tool": "scamper"},
+            {"flow_id": 1, "ttl": 2, "src_ip": "b", "rtt_ms": 2.0, "protocol": "udp", "tool": "scamper"},
+            {"flow_id": 2, "ttl": 1, "src_ip": "a", "rtt_ms": 1.0, "protocol": "icmp", "tool": "mtr"},
+            {"flow_id": 2, "ttl": 2, "src_ip": "b", "rtt_ms": 2.0, "protocol": "icmp", "tool": "mtr"},
+        ]
+        graph = graphlib.interface_graph(hops)
+        data = graph["a"]["b"]
+        self.assertEqual(data["protocols"], {"udp", "icmp"})
+        self.assertEqual(data["tools"], {"scamper", "mtr"})
+        self.assertEqual(data["count"], 2)
 
 
 class AliasTest(unittest.TestCase):

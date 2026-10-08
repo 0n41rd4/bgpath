@@ -119,7 +119,7 @@ function draw() {
     g.appendChild(el("path", {class:"edge", d, stroke:"transparent", "stroke-width":14}));
     const handoffTip = hand.ixps.length ? " · suspected IXP " + hand.ixps.map(x=>x.name).join(", ")
       : (hand.facilities.length ? " · suspected facility " + hand.facilities.map(f=>f.name).join(", ") : "");
-    g.addEventListener("mousemove", ev => tip(ev, `hop → hop · ttl ${e.ttl}${e.gap ? " · gap" : ""}${e.min_rtt_ms!=null ? " · "+e.min_rtt_ms.toFixed(1)+"ms" : ""}${handoffTip}`));
+    g.addEventListener("mousemove", ev => tip(ev, `hop → hop · ttl ${e.ttl}${e.gap ? " · gap" : ""}${e.min_rtt_ms!=null ? " · "+e.min_rtt_ms.toFixed(1)+"ms" : ""}${(e.protocols&&e.protocols.length) ? " · "+e.protocols.join("/") : ""}${handoffTip}`));
     g.addEventListener("mouseleave", hideTip);
     g.addEventListener("click", ev => { ev.stopPropagation(); showEdge(e); });
     viewport.appendChild(g);
@@ -180,6 +180,7 @@ function showHop(h) {
   panel.textContent = "";
   panel.appendChild(title("HOP"));
   panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as], ["as name", h.as_name],
+                          ["protocols", (h.protocols||[]).join(", ")], ["tools", (h.tools||[]).join(", ")],
                           ["aliased asns", (h.aliased_asns||[]).join(", ")], ["machine", h.machine],
                           ["location", h.geo ? [h.geo.city, h.geo.country].filter(Boolean).join(", ") + "  (" + h.geo.source + ")" : null],
                           ["rtt_ms", h.rtt_ms], ["rtt bound", h.rtt_km_upper!=null ? "≤ " + Math.round(h.rtt_km_upper) + " km" : null],
@@ -212,6 +213,7 @@ function showEdge(e) {
   panel.appendChild(rows([["from", e.source + (e.from_as ? "  " + e.from_as : "")],
                           ["to", e.target + (e.to_as ? "  " + e.to_as : "")],
                           ["ttl", e.ttl], ["flows", e.count], ["min_rtt_ms", e.min_rtt_ms],
+                          ["protocols", (e.protocols||[]).join(", ")], ["tools", (e.tools||[]).join(", ")],
                           ["gap", e.gap ? "yes" : "no"]]));
   const hand = e.handoff || {ixps:[], facilities:[], bgp:[], geo:null};
   if (hand.geo) {

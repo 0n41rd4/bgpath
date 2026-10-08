@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS hops (
     nat_id     INTEGER,
     mpls       TEXT,
     is_last    INTEGER DEFAULT 0,
-    name       TEXT
+    name       TEXT,
+    protocol   TEXT,
+    tool       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_hops_run ON hops(run_id);
 CREATE TABLE IF NOT EXISTS nodes (
@@ -62,6 +64,10 @@ CREATE INDEX IF NOT EXISTS idx_edges_run ON edges(run_id, layer);
 def open_store(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(hops)")}
+    for column in ("protocol", "tool"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE hops ADD COLUMN {column} TEXT")
     return conn
 
 
@@ -86,8 +92,8 @@ def save_run(conn: sqlite3.Connection, run: dict) -> None:
 def save_hops(conn: sqlite3.Connection, run_id: str, hops: list[dict]) -> None:
     conn.executemany(
         "INSERT INTO hops (run_id, flow_id, ttl, src_ip, rtt_ms, icmp_type, icmp_code, "
-        "reply_ttl, ip_id, nat_id, mpls, is_last, name) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "reply_ttl, ip_id, nat_id, mpls, is_last, name, protocol, tool) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 run_id,
@@ -103,11 +109,30 @@ def save_hops(conn: sqlite3.Connection, run_id: str, hops: list[dict]) -> None:
                 json.dumps(hop.get("mpls") or []),
                 1 if hop.get("is_last") else 0,
                 hop.get("name"),
+                hop.get("protocol"),
+                hop.get("tool"),
             )
             for hop in hops
         ],
     )
     conn.commit()
+
+
+def load_hops(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT flow_id, ttl, src_ip, rtt_ms, icmp_type, icmp_code, reply_ttl, ip_id, nat_id, mpls, is_last, protocol, tool "
+        "FROM hops WHERE run_id = ?",
+        (run_id,),
+    ).fetchall()
+    return [
+        {
+            "flow_id": flow, "ttl": ttl, "src_ip": ip, "rtt_ms": rtt,
+            "icmp_type": icmp_type, "icmp_code": icmp_code, "reply_ttl": reply,
+            "ip_id": ip_id, "nat_id": nat_id, "mpls": json.loads(mpls or "[]"),
+            "is_last": bool(is_last), "protocol": protocol, "tool": tool,
+        }
+        for flow, ttl, ip, rtt, icmp_type, icmp_code, reply, ip_id, nat_id, mpls, is_last, protocol, tool in rows
+    ]
 
 
 def add_node(conn: sqlite3.Connection, layer: str, key: str, attrs: dict | None = None) -> str:
@@ -142,6 +167,11 @@ def add_edge(
 
 
 def commit(conn: sqlite3.Connection) -> None:
+    conn.commit()
+
+
+def clear_layer(conn: sqlite3.Connection, run_id: str, layer: str) -> None:
+    conn.execute("DELETE FROM edges WHERE run_id = ? AND layer = ?", (run_id, layer))
     conn.commit()
 
 

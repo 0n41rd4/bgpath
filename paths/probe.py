@@ -23,6 +23,8 @@ import time
 DUBLIN = "dublin-traceroute"
 SCAMPER = "scamper"
 TOOLS = {"scamper": SCAMPER, "dublin": DUBLIN}
+PARIS = {"udp": "udp-paris", "icmp": "icmp-paris", "tcp": "tcp-ack"}
+PROTOCOLS = tuple(PARIS)
 
 _sudo_cache: list[str] | None = None
 
@@ -53,11 +55,21 @@ def _scamper_command() -> list[str]:
     return _sudo_cache
 
 
-def capture_scamper(target: str, flows: int = 4, max_ttl: int = 20, timeout: int = 180) -> list[dict]:
+def capture_scamper(
+    target: str,
+    flows: int = 4,
+    max_ttl: int = 20,
+    timeout: int = 180,
+    protocols: tuple[str, ...] = ("udp",),
+) -> list[dict]:
     command = _scamper_command()
     args: list[str] = []
-    for index in range(flows):
-        args += ["-I", f"trace -P udp-paris -q 2 -w 1 -m {max_ttl} -s {40000 + index} {target}"]
+    sport = 40000
+    for protocol in protocols:
+        paris = PARIS.get(protocol, protocol)
+        for index in range(flows):
+            args += ["-I", f"trace -P {paris} -q 2 -w 1 -m {max_ttl} -s {sport + index} {target}"]
+        sport += 1000
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "scamper.json")
         subprocess.run(
@@ -77,6 +89,7 @@ def parse_scamper(traces: list[dict]) -> list[dict]:
     for trace in traces:
         flow_id = trace.get("sport")
         dst = trace.get("dst")
+        protocol = trace.get("method")
         for hop in trace.get("hops") or []:
             hops.append(
                 {
@@ -93,6 +106,8 @@ def parse_scamper(traces: list[dict]) -> list[dict]:
                     "mpls": hop.get("mpls") or [],
                     "is_last": hop.get("addr") == dst,
                     "name": None,
+                    "protocol": protocol,
+                    "tool": SCAMPER,
                 }
             )
     hops.sort(key=lambda hop: (hop["flow_id"] or 0, hop["ttl"] or 0))
@@ -122,8 +137,10 @@ def parse_dublin(payload: dict) -> list[dict]:
     hops: list[dict] = []
     for flow_id, entries in (payload.get("flows") or {}).items():
         for entry in entries:
-            sent_ip = ((entry.get("sent") or {}).get("ip")) or {}
+            sent = entry.get("sent") or {}
+            sent_ip = sent.get("ip") or {}
             received = entry.get("received")
+            protocol = "udp" if sent.get("udp") else ("icmp" if sent.get("icmp") else None)
             hop = {
                 "flow_id": int(flow_id),
                 "ttl": sent_ip.get("ttl"),
@@ -138,6 +155,8 @@ def parse_dublin(payload: dict) -> list[dict]:
                 "mpls": [],
                 "is_last": bool(entry.get("is_last")),
                 "name": entry.get("name"),
+                "protocol": protocol,
+                "tool": DUBLIN,
             }
             if received:
                 icmp = received.get("icmp") or {}
@@ -164,15 +183,17 @@ def run(
     max_ttl: int = 20,
     tool: str = "scamper",
     timeout: int = 180,
+    protocols: tuple[str, ...] = ("udp",),
 ) -> tuple[str, list[dict], dict]:
     if tool == "dublin":
         hops = parse_dublin(capture_dublin(target, flows=flows, max_ttl=max_ttl, timeout=timeout))
     else:
-        hops = parse_scamper(capture_scamper(target, flows=flows, max_ttl=max_ttl, timeout=timeout))
+        hops = parse_scamper(capture_scamper(target, flows=flows, max_ttl=max_ttl, timeout=timeout, protocols=protocols))
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     vantage = next((hop["probe_src"] for hop in hops if hop.get("probe_src")), None)
     meta = {
         "tool": TOOLS.get(tool, tool),
+        "protocols": list(protocols) if tool != "dublin" else ["udp"],
         "flows": flows,
         "max_ttl": max_ttl,
         "flow_ids": sorted({hop["flow_id"] for hop in hops if hop["flow_id"] is not None}),

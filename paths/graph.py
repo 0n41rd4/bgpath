@@ -30,6 +30,13 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
         )
         for hop in answered:
             graph.add_node(hop["src_ip"])
+            data = graph.nodes[hop["src_ip"]]
+            data.setdefault("protocols", set())
+            data.setdefault("tools", set())
+            if hop.get("protocol"):
+                data["protocols"].add(hop["protocol"])
+            if hop.get("tool"):
+                data["tools"].add(hop["tool"])
         for previous, current in zip(answered, answered[1:]):
             span = (
                 current["ttl"] - previous["ttl"]
@@ -41,12 +48,19 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
 
 
 def _add_edge(graph: nx.DiGraph, src: str, dst: str, flow_id: int, hop: dict, span: int) -> None:
+    protocol = hop.get("protocol")
+    tool = hop.get("tool")
     if graph.has_edge(src, dst):
         data = graph[src][dst]
         data["count"] += 1
-        data["flows"].add(flow_id)
+        if flow_id is not None:
+            data["flows"].add(flow_id)
         data["span"] = min(data["span"], span)
         data["gap"] = data["span"] > 1
+        if protocol:
+            data["protocols"].add(protocol)
+        if tool:
+            data["tools"].add(tool)
         if hop["rtt_ms"] is not None:
             data["min_rtt_ms"] = min(data["min_rtt_ms"], hop["rtt_ms"]) if data["min_rtt_ms"] is not None else hop["rtt_ms"]
         if hop["ttl"] is not None:
@@ -56,7 +70,9 @@ def _add_edge(graph: nx.DiGraph, src: str, dst: str, flow_id: int, hop: dict, sp
             src,
             dst,
             count=1,
-            flows={flow_id},
+            flows={flow_id} if flow_id is not None else set(),
+            protocols={protocol} if protocol else set(),
+            tools={tool} if tool else set(),
             span=span,
             gap=span > 1,
             min_rtt_ms=hop["rtt_ms"],
@@ -77,9 +93,13 @@ def ecmp_nodes(graph: nx.DiGraph) -> list[str]:
     return sorted(result)
 
 
+def _sorted_sets(data: dict) -> dict:
+    return {key: sorted(value) for key, value in data.items() if isinstance(value, set)}
+
+
 def persist(conn, run_id: str, graph: nx.DiGraph, layer: str = "interface") -> None:
     for node in graph.nodes:
-        store.add_node(conn, layer, node)
+        store.add_node(conn, layer, node, _sorted_sets(graph.nodes[node]))
     for src, dst, data in graph.edges(data=True):
         store.add_edge(
             conn,
@@ -89,7 +109,14 @@ def persist(conn, run_id: str, graph: nx.DiGraph, layer: str = "interface") -> N
             dst,
             ttl=data.get("ttl"),
             rtt_ms=data.get("min_rtt_ms"),
-            attrs={"flows": sorted(data.get("flows") or []), "gap": data.get("gap"), "span": data.get("span"), "count": data.get("count")},
+            attrs={
+                "flows": sorted(data.get("flows") or [], key=lambda value: (value is None, value)),
+                "protocols": sorted(data.get("protocols") or []),
+                "tools": sorted(data.get("tools") or []),
+                "gap": data.get("gap"),
+                "span": data.get("span"),
+                "count": data.get("count"),
+            },
         )
     store.commit(conn)
 
