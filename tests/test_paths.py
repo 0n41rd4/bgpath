@@ -212,6 +212,39 @@ class ExportTest(unittest.TestCase):
         self.assertNotIn("/*__PATHS_DATA__*/", html)
         self.assertIn("AS15169", html)
 
+    def test_handoff_intersection_and_ixp_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            store.save_run(conn, {"run_id": "r1", "target": "2.2.2.2", "src_ip": "10.0.0.1", "tool": "scamper", "started_at": "t"})
+            store.save_hops(conn, "r1", [
+                {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0, "icmp_type": 11, "icmp_code": 0, "is_last": False},
+                {"flow_id": 1, "ttl": 2, "src_ip": "2.2.2.2", "rtt_ms": 5.0, "icmp_type": 3, "icmp_code": 3, "is_last": True},
+            ])
+            store.add_node(conn, "as", "AS1", {"asn": "1"})
+            store.add_node(conn, "as", "AS2", {"asn": "2"})
+            store.add_node(conn, "ix", "IX:10", {"name": "IX-A", "ix_id": 10})
+            store.add_node(conn, "ix", "IX:20", {"name": "IX-B", "ix_id": 20})
+            store.add_node(conn, "facility", "FAC:F1", {"name": "Equinix X", "city": "Ashburn"})
+            store.add_edge(conn, "r1", "interface", "10.0.0.1", "2.2.2.2", ttl=2, rtt_ms=5.0)
+            store.add_edge(conn, "r1", "origin", "10.0.0.1", "AS1")
+            store.add_edge(conn, "r1", "origin", "2.2.2.2", "AS2")
+            store.add_edge(conn, "r1", "ix", "AS1", "IX:10", attrs={"ipaddr4": "10.0.0.1"})
+            store.add_edge(conn, "r1", "ix", "AS2", "IX:10")
+            store.add_edge(conn, "r1", "ix", "AS1", "IX:20")
+            store.add_edge(conn, "r1", "facility", "AS1", "FAC:F1")
+            store.add_edge(conn, "r1", "facility", "AS2", "FAC:F1")
+            data = paths_export.build(conn, "r1")
+            conn.close()
+
+        edge = data["edges"][0]
+        self.assertEqual([x["name"] for x in edge["handoff"]["ixps"]], ["IX-A"])
+        self.assertEqual([f["name"] for f in edge["handoff"]["facilities"]], ["Equinix X"])
+        hop = next(h for h in data["hops"] if h["id"] == "10.0.0.1")
+        self.assertEqual(hop["ix"]["name"], "IX-A")
+        as1 = next(c for c in data["containers"] if c["label"] == "AS1")
+        self.assertEqual(as1["info"]["total_ixps"], 2)
+        self.assertEqual([x["name"] for x in as1["info"]["ixps"]], ["IX-A"])
+
 
 if __name__ == "__main__":
     unittest.main()

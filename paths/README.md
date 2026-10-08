@@ -33,8 +33,25 @@ ECMP branches solid and unanswered-TTL gaps dashed), and cross-layer facts are
 shown by **containment** — hops are grouped into AS boxes, and aliased hops are
 bracketed as a "same machine" box — instead of crossing edges. Hover gives a
 tooltip; click opens a panel with the node/edge attributes and a source-of-truth
-link. Facilities, IXPs and the BGP sessions (with collector, AS path and prefix)
-are listed in the panel, each linking back to its source.
+link.
+
+Cross-layer detail is **relevance-filtered, with no extra queries**. Each origin
+AS's PeeringDB IXPs and facilities are already fetched once (cached), so:
+
+- an **inter-AS traversal edge** carries a *suspected handoff*: the **intersection**
+  of the two ASes' IXP (and facility) sets — i.e. where they plausibly interconnect.
+  It is drawn as a coloured chip on the edge (`IX <name>` or `FAC ×n`), and clicking
+  the edge lists the exact IXPs/facilities. If the intersection is empty it says so
+  (likely transit or private interconnect).
+- an **AS box** lists only the *suspected* IXPs/facilities (shared with a scanned
+  neighbour) plus the total count — not the AS's full portfolio (Google's 135
+  facilities collapse to the 3 that matter).
+- a **hop** is matched directly against its AS's PeeringDB peering-LAN IPs
+  (`netixlan` `ipaddr4`/`ipaddr6`); a match is flagged with an IXP dot and named on
+  click. Hops otherwise report their AS, aliased ASes and machine.
+
+All of this reuses the same cached PeeringDB responses, so the intersection and the
+port match cost nothing extra.
 
 ## Layers
 
@@ -46,7 +63,7 @@ are listed in the panel, each linking back to its source.
 | `session` | — | announcing IP → collector | RouteViews `reporting_peers` |
 | `collector` | `COL:<name>` (interface IP + lat/lon) | — | RouteViews `/collector` |
 | `facility` | `FAC:<name>` | AS → facility | PeeringDB `netfac` |
-| `ix` | `IX:<id>` | AS → IX | PeeringDB `netixlan` |
+| `ix` | `IX:<id>` | AS → IX (carries the AS's peering-LAN `ipaddr4`/`ipaddr6`) | PeeringDB `netixlan` |
 
 ## Source-analysis boundary
 

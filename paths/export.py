@@ -3,8 +3,13 @@
 Visual edges are packet traversal only: the measured hop-to-hop chain (including
 ECMP branches and gap edges). Cross-layer facts are shown by **containment**, not
 by crossing edges: hops are grouped into AS boxes and aliased hops are bracketed
-as a machine. Everything else (facilities, IXPs, BGP sessions, collectors) is
-reachable from the click panel with a source-of-truth link.
+as a machine.
+
+Inter-AS edges carry a *suspected handoff* computed with no extra queries: the
+intersection of the two ASes' already-fetched PeeringDB IXP/facility sets (the
+likely interconnect). Hops are matched against their AS's `netixlan` peering-LAN
+IPs to flag IXP presence directly. AS boxes list only the relevant (shared)
+IXPs/facilities plus totals; the full lists and BGP sessions stay in the panel.
 """
 
 from __future__ import annotations
@@ -64,6 +69,10 @@ def _hop_ttl(conn, run_id: str) -> dict[str, int]:
     return {ip: ttl for ip, ttl in rows}
 
 
+def _layer_map(nodes: dict[str, dict], layer: str) -> dict[str, dict]:
+    return {key: node["attrs"] for key, node in nodes.items() if node["layer"] == layer}
+
+
 def build(conn, run_id: str) -> dict:
     run, nodes, edges = _load(conn, run_id)
     target = run.get("target")
@@ -79,6 +88,42 @@ def build(conn, run_id: str) -> dict:
 
     as_of = {e["source"]: e["target"] for e in edges if e["layer"] == "origin" and e["source"] in trace}
     machine_of = {e["source"]: e["target"] for e in edges if e["layer"] == "machine" and e["source"] in trace}
+    aliased = {
+        ip: nodes[ip]["attrs"]["aliased_asns"]
+        for ip in trace
+        if nodes.get(ip, {}).get("attrs", {}).get("aliased_asns")
+    }
+
+    ix_nodes = _layer_map(nodes, "ix")
+    fac_nodes = _layer_map(nodes, "facility")
+
+    as_ix: dict[str, dict[str, dict]] = {}
+    as_fac: dict[str, dict[str, dict]] = {}
+    for edge in edges:
+        if edge["layer"] == "ix":
+            info = ix_nodes.get(edge["target"], {})
+            as_ix.setdefault(edge["source"], {})[edge["target"]] = {
+                "id": info.get("ix_id"),
+                "name": info.get("name") or edge["target"],
+                "ipaddr4": edge["attrs"].get("ipaddr4"),
+                "ipaddr6": edge["attrs"].get("ipaddr6"),
+                "source_url": info.get("source_url"),
+            }
+        elif edge["layer"] == "facility":
+            info = fac_nodes.get(edge["target"], {})
+            as_fac.setdefault(edge["source"], {})[edge["target"]] = {
+                "name": info.get("name") or edge["target"],
+                "city": info.get("city"),
+                "country": info.get("country"),
+                "source_url": info.get("source_url"),
+            }
+
+    ix_port: dict[tuple[str, str], str] = {}
+    for asn, members in as_ix.items():
+        for key, info in members.items():
+            for field in ("ipaddr4", "ipaddr6"):
+                if info.get(field):
+                    ix_port[(asn, info[field])] = key
 
     columns: dict[int, list[str]] = {}
     for ip in trace:
@@ -93,31 +138,79 @@ def build(conn, run_id: str) -> dict:
         for row, ip in enumerate(members):
             position[ip] = (ORIGIN_X + index[value] * COL_GAP, ORIGIN_Y + offset + row * ROW_GAP)
 
+    relevant_ix: dict[str, set[str]] = {}
+    relevant_fac: dict[str, set[str]] = {}
+    out_edges = []
+    for edge in traversal:
+        if edge["source"] not in position or edge["target"] not in position:
+            continue
+        a_as, b_as = as_of.get(edge["source"]), as_of.get(edge["target"])
+        handoff = {"ixps": [], "facilities": []}
+        if a_as and b_as and a_as != b_as:
+            shared_ix = sorted(set(as_ix.get(a_as, {})) & set(as_ix.get(b_as, {})), key=lambda k: as_ix[a_as][k]["name"] or "")
+            shared_fac = sorted(set(as_fac.get(a_as, {})) & set(as_fac.get(b_as, {})), key=lambda k: as_fac[a_as][k]["name"] or "")
+            handoff = {
+                "ixps": [as_ix[a_as][k] for k in shared_ix],
+                "facilities": [as_fac[a_as][k] for k in shared_fac],
+            }
+            if shared_ix:
+                relevant_ix.setdefault(a_as, set()).update(shared_ix)
+                relevant_ix.setdefault(b_as, set()).update(shared_ix)
+            if shared_fac:
+                relevant_fac.setdefault(a_as, set()).update(shared_fac)
+                relevant_fac.setdefault(b_as, set()).update(shared_fac)
+        out_edges.append(
+            {
+                "source": edge["source"],
+                "target": edge["target"],
+                "gap": bool(edge["attrs"].get("gap")),
+                "count": edge["count"],
+                "min_rtt_ms": edge["min_rtt_ms"],
+                "ttl": edge["ttl"],
+                "from_as": a_as,
+                "to_as": b_as,
+                "handoff": handoff,
+            }
+        )
+
     hops = []
     for ip in sorted(trace):
         x, y = position[ip]
+        asn = as_of.get(ip)
+        port = ix_port.get((asn, ip)) if asn else None
+        if port and asn:
+            relevant_ix.setdefault(asn, set()).add(port)
+        hop_ix = as_ix.get(asn, {}).get(port) if port else None
+        rel_ix = [as_ix[asn][k] for k in sorted(relevant_ix.get(asn, set()), key=lambda k: as_ix[asn][k]["name"] or "")] if asn else []
+        rel_fac = [as_fac[asn][k] for k in sorted(relevant_fac.get(asn, set()), key=lambda k: as_fac[asn][k]["name"] or "")] if asn else []
         hops.append(
             {
                 "id": ip,
                 "ttl": ttl.get(ip),
                 "x": x,
                 "y": y,
-                "as": as_of.get(ip),
+                "as": asn,
                 "machine": machine_of.get(ip),
+                "aliased_asns": aliased.get(ip),
                 "is_target": ip == target,
+                "ix": hop_ix,
+                "relevant_ixps": rel_ix,
+                "relevant_facilities": rel_fac,
+                "total_ixps": len(as_ix.get(asn, {})),
+                "total_facilities": len(as_fac.get(asn, {})),
                 "attrs": nodes.get(ip, {}).get("attrs", {}),
                 "source_url": nodes.get(ip, {}).get("attrs", {}).get("source_url") or f"https://stat.ripe.net/{ip}",
             }
         )
 
-    def box(members: list[str], pad: float) -> dict:
+    def box(members: list[str], pad: float, header: float = 16) -> dict:
         xs = [position[ip][0] for ip in members if ip in position]
         ys = [position[ip][1] for ip in members if ip in position]
         return {
             "x": min(xs) - pad,
-            "y": min(ys) - pad - 16,
+            "y": min(ys) - pad - header,
             "w": max(xs) - min(xs) + W + 2 * pad,
-            "h": max(ys) - min(ys) + H + 2 * pad + 16,
+            "h": max(ys) - min(ys) + H + 2 * pad + header,
         }
 
     containers = []
@@ -125,28 +218,21 @@ def build(conn, run_id: str) -> dict:
     for ip, asn in as_of.items():
         as_members.setdefault(asn, []).append(ip)
     for asn, members in sorted(as_members.items()):
-        info = _as_info(edges, asn)
-        containers.append({"id": f"as:{asn}", "kind": "as", "label": asn, **box(members, 12), "info": info})
+        info = {
+            "ixps": [as_ix[asn][k] for k in sorted(relevant_ix.get(asn, set()), key=lambda k: as_ix[asn][k]["name"] or "")],
+            "facilities": [as_fac[asn][k] for k in sorted(relevant_fac.get(asn, set()), key=lambda k: as_fac[asn][k]["name"] or "")],
+            "total_ixps": len(as_ix.get(asn, {})),
+            "total_facilities": len(as_fac.get(asn, {})),
+            "source_url": f"https://stat.ripe.net/{asn}",
+        }
+        header = 30 if (info["ixps"] or info["facilities"]) else 16
+        containers.append({"id": f"as:{asn}", "kind": "as", "label": asn, **box(members, 12, header), "info": info})
 
     machine_members: dict[str, list[str]] = {}
     for ip, machine in machine_of.items():
         machine_members.setdefault(machine, []).append(ip)
     for machine, members in sorted(machine_members.items()):
         containers.append({"id": f"machine:{machine}", "kind": "machine", "label": "same machine", **box(members, 6), "info": {}})
-
-    out_edges = []
-    for edge in traversal:
-        if edge["source"] in position and edge["target"] in position:
-            out_edges.append(
-                {
-                    "source": edge["source"],
-                    "target": edge["target"],
-                    "gap": bool(edge["attrs"].get("gap")),
-                    "count": edge["count"],
-                    "min_rtt_ms": edge["min_rtt_ms"],
-                    "ttl": edge["ttl"],
-                }
-            )
 
     return {
         "run": run,
@@ -156,16 +242,6 @@ def build(conn, run_id: str) -> dict:
         "sessions": _sessions(edges),
         "facilities": _node_list(nodes, edges, "facility"),
         "ixps": _node_list(nodes, edges, "ix"),
-    }
-
-
-def _as_info(edges: list[dict], asn: str) -> dict:
-    facilities = [e["target"] for e in edges if e["layer"] == "facility" and e["source"] == asn]
-    ixps = [e["target"] for e in edges if e["layer"] == "ix" and e["source"] == asn]
-    return {
-        "facilities": sorted(set(facilities)),
-        "ixps": sorted(set(ixps)),
-        "source_url": f"https://stat.ripe.net/{asn}",
     }
 
 

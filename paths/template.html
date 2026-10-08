@@ -23,6 +23,11 @@
   .asbox { fill:#16a34a14; stroke:#16a34a88; stroke-width:1; }
   .machinebox { fill:none; stroke:#7c3aed; stroke-width:1.5; stroke-dasharray:5 4; }
   .boxtitle { fill:#cbd5e1; font-size:11px; }
+  .boxsub { fill:#86efac; font-size:10px; }
+  .ixchip rect { fill:#0ea5e9; stroke:#0b1020; stroke-width:1; rx:8; }
+  .ixchip text { fill:#fff; font-size:10px; pointer-events:none; }
+  .ixchip { cursor:pointer; }
+  .hop .ixdot { fill:#0ea5e9; stroke:#0b1020; stroke-width:1; }
   #panel { width:380px; border-left:1px solid var(--line); background:var(--panel); padding:14px; overflow:auto; }
   #panel h2 { font-size:12px; margin:14px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
   #panel h2:first-child { margin-top:0; }
@@ -41,7 +46,7 @@
 <header>
   <h1>aranya · scan graph</h1>
   <span class="meta" id="runmeta"></span>
-  <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · hover + click for detail &amp; source</span>
+  <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · click a hop, edge, IXP chip or AS box for detail &amp; source</span>
 </header>
 <div id="wrap">
   <div id="canvas"><svg id="svg"><g id="viewport"></g></svg></div>
@@ -71,7 +76,23 @@ function draw() {
     if (c.kind === "as") {
       g.appendChild(el("rect", {class:"asbox", x:c.x, y:c.y, width:c.w, height:c.h, rx:10, stroke:colorFor(c.label)}));
       const t = el("text", {class:"boxtitle", x:c.x+8, y:c.y+14}); t.textContent = c.label; g.appendChild(t);
-      g.addEventListener("mousemove", ev => tip(ev, "AS container · " + c.label));
+      const viaIx = c.info.ixps && c.info.ixps.length;
+      if (viaIx) {
+        const names = c.info.ixps.map(x => x.name).slice(0, 2);
+        const more = c.info.ixps.length - names.length;
+        const s = el("text", {class:"boxsub", x:c.x+8, y:c.y+26});
+        s.textContent = "via " + names.join(", ") + (more > 0 ? ` +${more}` : "");
+        g.appendChild(s);
+      } else if (c.info.facilities && c.info.facilities.length) {
+        const n = c.info.facilities.length;
+        const first = c.info.facilities[0].name;
+        const short = first.length > 20 ? first.slice(0, 19) + "…" : first;
+        const s = el("text", {class:"boxsub", x:c.x+8, y:c.y+26});
+        s.textContent = "near " + short + (n > 1 ? ` +${n-1}` : "");
+        g.appendChild(s);
+      }
+      const hasHandoff = (c.info.ixps && c.info.ixps.length) || (c.info.facilities && c.info.facilities.length);
+      g.addEventListener("mousemove", ev => tip(ev, "AS container · " + c.label + (hasHandoff ? " · suspected handoff" : "")));
       g.addEventListener("click", ev => { ev.stopPropagation(); showAs(c); });
     } else {
       g.appendChild(el("rect", {class:"machinebox", x:c.x, y:c.y, width:c.w, height:c.h, rx:8}));
@@ -88,13 +109,32 @@ function draw() {
       ? `M${ax},${ay} C${ax+26},${ay} ${bx+W+26},${by} ${bx+W},${by}`
       : `M${ax},${ay} C${mid},${ay} ${mid},${by} ${bx},${by}`;
     const g = el("g");
-    g.appendChild(el("path", {class:"edge", d, stroke:"#60a5fa", "stroke-width": 1.5 + Math.min(e.count,4),
+    const hand = e.handoff || {ixps:[], facilities:[]};
+    g.appendChild(el("path", {class:"edge", d, stroke: (hand.ixps.length || hand.facilities.length) ? "#f59e0b" : "#60a5fa",
+                              "stroke-width": 1.5 + Math.min(e.count,4),
                               "stroke-dasharray": e.gap ? "6 5" : "none", opacity:0.9}));
     g.appendChild(el("path", {class:"edge", d, stroke:"transparent", "stroke-width":14}));
-    g.addEventListener("mousemove", ev => tip(ev, `hop → hop · ttl ${e.ttl}${e.gap ? " · gap" : ""}${e.min_rtt_ms!=null ? " · "+e.min_rtt_ms.toFixed(1)+"ms" : ""}`));
+    const handoffTip = hand.ixps.length ? " · suspected IXP " + hand.ixps.map(x=>x.name).join(", ")
+      : (hand.facilities.length ? " · suspected facility " + hand.facilities.map(f=>f.name).join(", ") : "");
+    g.addEventListener("mousemove", ev => tip(ev, `hop → hop · ttl ${e.ttl}${e.gap ? " · gap" : ""}${e.min_rtt_ms!=null ? " · "+e.min_rtt_ms.toFixed(1)+"ms" : ""}${handoffTip}`));
     g.addEventListener("mouseleave", hideTip);
     g.addEventListener("click", ev => { ev.stopPropagation(); showEdge(e); });
     viewport.appendChild(g);
+    if (hand.ixps.length || hand.facilities.length) {
+      const isIx = hand.ixps.length > 0;
+      const list = isIx ? hand.ixps : hand.facilities;
+      const label = isIx ? ("IX " + list[0].name + (list.length > 1 ? ` +${list.length-1}` : "")) : ("FAC ×" + list.length);
+      const cx = Math.abs(a.x-b.x) < 1 ? Math.max(ax,bx)+40 : (ax+bx)/2;
+      const cy = (a.y + b.y)/2 + H/2 - 16;
+      const cg = el("g", {class:"ixchip"});
+      const w = 12 + label.length * 6;
+      cg.appendChild(el("rect", {x:cx-w/2, y:cy-9, width:w, height:16, fill: isIx ? "#0ea5e9" : "#b45309"}));
+      const ct = el("text", {x:cx, y:cy+3, "text-anchor":"middle"}); ct.textContent = label; cg.appendChild(ct);
+      cg.addEventListener("mousemove", ev => tip(ev, "suspected handoff · " + list.map(x=>x.name).join(", ")));
+      cg.addEventListener("mouseleave", hideTip);
+      cg.addEventListener("click", ev => { ev.stopPropagation(); showEdge(e); });
+      viewport.appendChild(cg);
+    }
   }
   for (const h of DATA.hops) {
     const g = el("g", {class:"hop", transform:`translate(${h.x},${h.y})`});
@@ -102,7 +142,9 @@ function draw() {
     const t = el("text", {x:8, y:19});
     t.textContent = (h.ttl!=null ? h.ttl+"  " : "") + h.id;
     g.appendChild(t);
-    g.addEventListener("mousemove", ev => tip(ev, "hop · " + h.id + (h.as ? " · " + h.as : "")));
+    if (h.ix) g.appendChild(el("circle", {class:"ixdot", cx:W-8, cy:8, r:4}));
+    const hopTip = "hop · " + h.id + (h.as ? " · " + h.as : "") + (h.ix ? " · IXP " + h.ix.name : "");
+    g.addEventListener("mousemove", ev => tip(ev, hopTip));
     g.addEventListener("mouseleave", hideTip);
     g.addEventListener("click", ev => { ev.stopPropagation(); showHop(h); });
     viewport.appendChild(g);
@@ -126,25 +168,49 @@ function item(text, url) { const d=document.createElement("div"); d.className="i
 function showHop(h) {
   panel.textContent = "";
   panel.appendChild(title("HOP"));
-  panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as], ["machine", h.machine]]));
+  panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as],
+                          ["aliased asns", (h.aliased_asns||[]).join(", ")], ["machine", h.machine],
+                          ["at IXP", h.ix ? h.ix.name : null],
+                          ["IXPs (AS)", h.total_ixps ? h.relevant_ixps.length + " suspected / " + h.total_ixps : null],
+                          ["facilities (AS)", h.total_facilities ? h.relevant_facilities.length + " suspected / " + h.total_facilities : null]]));
   const a = link(h.source_url); if (a) panel.appendChild(a);
+  if (h.relevant_ixps && h.relevant_ixps.length) {
+    panel.appendChild(title("suspected IXPs · shared with neighbour"));
+    for (const x of h.relevant_ixps) panel.appendChild(item(x.name, x.source_url));
+  }
+  if (h.relevant_facilities && h.relevant_facilities.length) {
+    panel.appendChild(title("suspected facilities"));
+    for (const f of h.relevant_facilities) panel.appendChild(item(f.name + (f.city ? " · " + f.city : ""), f.source_url));
+  }
 }
 function showEdge(e) {
   panel.textContent = "";
   panel.appendChild(title("TRAVERSAL EDGE"));
-  panel.appendChild(rows([["from", e.source], ["to", e.target], ["ttl", e.ttl], ["flows", e.count],
-                          ["min_rtt_ms", e.min_rtt_ms], ["gap", e.gap ? "yes" : "no"]]));
+  panel.appendChild(rows([["from", e.source + (e.from_as ? "  " + e.from_as : "")],
+                          ["to", e.target + (e.to_as ? "  " + e.to_as : "")],
+                          ["ttl", e.ttl], ["flows", e.count], ["min_rtt_ms", e.min_rtt_ms],
+                          ["gap", e.gap ? "yes" : "no"]]));
+  const hand = e.handoff || {ixps:[], facilities:[]};
+  panel.appendChild(title("suspected handoff"));
+  if (!hand.ixps.length && !hand.facilities.length) {
+    const note = (e.from_as && e.to_as && e.from_as !== e.to_as)
+      ? "no shared IXP / facility (PeeringDB)" : "intra-AS";
+    panel.appendChild(rows([["", note]]));
+  }
+  for (const x of hand.ixps) panel.appendChild(item("IXP · " + x.name, x.source_url));
+  for (const f of hand.facilities) panel.appendChild(item("facility · " + f.name + (f.city ? " · " + f.city : ""), f.source_url));
 }
 function showAs(c) {
   panel.textContent = "";
   panel.appendChild(title("AS CONTAINER · " + c.label));
   const a = link(c.info.source_url); if (a) panel.appendChild(a);
-  panel.appendChild(title("facilities"));
-  if (!c.info.facilities.length) panel.appendChild(rows([["", "none known"]]));
-  for (const f of c.info.facilities) panel.appendChild(item(f, null));
-  panel.appendChild(title("IXPs"));
-  if (!c.info.ixps.length) panel.appendChild(rows([["", "none known"]]));
-  for (const x of c.info.ixps) panel.appendChild(item(x, null));
+  const ixps = c.info.ixps || [], facs = c.info.facilities || [];
+  panel.appendChild(title("suspected IXPs · " + ixps.length + " / " + c.info.total_ixps));
+  if (!ixps.length) panel.appendChild(rows([["", "no shared IXP with scanned neighbours"]]));
+  for (const x of ixps) panel.appendChild(item(x.name, x.source_url));
+  panel.appendChild(title("suspected facilities · " + facs.length + " / " + c.info.total_facilities));
+  if (!facs.length) panel.appendChild(rows([["", "no shared facility with scanned neighbours"]]));
+  for (const f of facs) panel.appendChild(item(f.name + (f.city ? " · " + f.city : ""), f.source_url));
 }
 
 function summary() {

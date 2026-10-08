@@ -153,9 +153,9 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str]) -> tuple[int, int]:
                     continue
                 key = f"IX:{ix_id}"
                 graph.add_node(key, layer="ix", name=ix.get("name"))
-                graph.add_edge(as_key(asn), key, layer="ix")
+                graph.add_edge(as_key(asn), key, layer="ix", ipaddr4=ix.get("ipaddr4"), ipaddr6=ix.get("ipaddr6"))
                 store.add_node(conn, "ix", key, {"name": ix.get("name"), "ix_id": ix_id, "source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
-                store.add_edge(conn, run_id, "ix", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
+                store.add_edge(conn, run_id, "ix", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/ix/{ix_id}", "ipaddr4": ix.get("ipaddr4"), "ipaddr6": ix.get("ipaddr6")})
                 ix_added += 1
         except Exception:
             pass
