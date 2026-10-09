@@ -48,9 +48,9 @@ setcap cap_net_raw+ep /usr/bin/dublin-traceroute 2>/dev/null || true
 
 echo "== voyage: maintained Paris successor (Rust), as \$SUDO_USER =="
 if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1; then
-  sudo -u "$SUDO_USER" -H bash -lc 'command -v cargo >/dev/null && cargo install --git https://github.com/dioptra-io/voyage' || \
-    echo "cargo/voyage install skipped (install Rust, then: cargo install --git https://github.com/dioptra-io/voyage)" >&2
-  setcap cap_net_raw+ep "/home/${SUDO_USER}/.cargo/bin/voyage" 2>/dev/null || true
+  sudo -u "$SUDO_USER" -H bash -lc 'command -v cargo >/dev/null && cargo install --git https://github.com/dioptra-io/voyage --locked' || \
+    echo "voyage install skipped (needs cargo; --locked is required, voyage has no releases)" >&2
+  setcap cap_net_raw,cap_net_admin+eip "/home/${SUDO_USER}/.cargo/bin/voyage" 2>/dev/null || true
 fi
 
 echo "== keep mtr-packet capability across upgrades =="
