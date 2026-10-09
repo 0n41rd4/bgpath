@@ -474,8 +474,11 @@ def build_graphs(conn, run_ids: list[str]) -> dict:
         run = data.get("run") or {}
         data["run_id"] = run_id
         data["label"] = f"{run.get('tool') or '?'} · {run.get('target') or '?'}"
+        data["vantage"] = run.get("vantage")
+        data["started_at"] = run.get("started_at")
         graphs.append(data)
-    return {"graphs": graphs}
+    vantages = sorted({g["vantage"] for g in graphs if g.get("vantage")})
+    return {"graphs": graphs, "vantages": vantages, "vantage_mismatch": len(vantages) > 1}
 
 
 def render_html(conn, run_ids) -> str:

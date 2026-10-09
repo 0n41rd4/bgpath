@@ -13,6 +13,7 @@
   header h1 { font-size:14px; margin:0; }
   header .meta { color:var(--muted); }
   .hint { color:var(--muted); }
+  .warn { color:#f87171; }
   #wrap { display:flex; height:calc(100vh - 52px); }
   #canvas { flex:1; overflow:hidden; position:relative; cursor:grab; }
   #canvas.grabbing { cursor:grabbing; }
@@ -47,6 +48,7 @@
 <header>
   <h1>aranya · scan graph</h1>
   <span class="meta" id="runmeta"></span>
+  <span class="meta warn" id="warn"></span>
   <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · dashed hop = weaker ttl · click a hop, edge, handoff chip or AS box for detail &amp; source</span>
 </header>
 <div id="wrap">
@@ -196,8 +198,13 @@ function draw() {
     drawGraph(g, row);
     viewport.appendChild(row);
     const lab = el("text", {class:"rowlabel", x:14, y:g._rowY - 18});
-    lab.textContent = (g.label || "?") + "   ·   " + g.hops.length + " hops · " + g.edges.length + " edges · " + (g.run.target || "");
+    lab.textContent = (g.label || "?") + "   ·   vantage " + (g.vantage || "?") + "   ·   " + (g.started_at || "?")
+      + "   ·   " + g.hops.length + " hops · " + g.edges.length + " edges";
     viewport.appendChild(lab);
+  }
+  if (DATA.vantage_mismatch) {
+    const w = document.getElementById("warn");
+    w.textContent = "⚠ rows captured from different vantages (" + (DATA.vantages || []).join(", ") + ") — not directly comparable";
   }
 }
 
@@ -318,7 +325,7 @@ function summary() {
     const low = g.hops.filter(h => h.ttl_confidence === "low").length;
     const med = g.hops.filter(h => h.ttl_confidence === "medium").length;
     panel.appendChild(item((g.label || "?") + "  ·  " + g.hops.length + " hops, " + g.edges.length + " edges, " +
-      "ttl " + (g.hops.length - low - med) + "/" + med + "/" + low + "  ·  " + (g.run.target || ""), null));
+      "ttl " + (g.hops.length - low - med) + "/" + med + "/" + low + "  ·  " + (g.vantage || "?") + " @ " + (g.started_at || "?"), null));
   }
   const collectors = new Map();
   let sessions = 0, facilities = 0, ixps = 0;

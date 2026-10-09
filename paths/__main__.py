@@ -22,7 +22,7 @@ DEFAULT_DB = "paths.db"
 
 
 def _run_id(target: str) -> str:
-    return f"{target}@{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    return f"{target}@{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.{os.urandom(2).hex()}"
 
 
 def _enrich(conn, run_id, interface, args) -> None:
@@ -145,6 +145,7 @@ def cmd_ingest(args) -> int:
             return 1
         run_id = _run_id(target)
     if not conn.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone():
+        vantage = args.vantage or next((hop.get("probe_src") for hop in hops if hop.get("probe_src")), None)
         store.save_run(
             conn,
             {
@@ -152,9 +153,9 @@ def cmd_ingest(args) -> int:
                 "target": target,
                 "port": None,
                 "proto": args.protocol,
-                "src_ip": None,
+                "src_ip": vantage,
                 "tool": args.tool,
-                "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "started_at": args.captured_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "meta": {"tool": args.tool, "protocols": [args.protocol] if args.protocol else []},
             },
         )
@@ -266,6 +267,8 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--tool", choices=list(ingest.TOOLS), required=True)
     ing.add_argument("--protocol", help="protocol label for the ingested hops")
     ing.add_argument("--target", help="target IP (required for a new run)")
+    ing.add_argument("--vantage", help="source IP this trace ran from (for comparison)")
+    ing.add_argument("--captured-at", help="capture time (ISO 8601) if it differs from now")
     ing.add_argument("--run-id", help="append to an existing run")
     ing.set_defaults(func=cmd_ingest)
 
