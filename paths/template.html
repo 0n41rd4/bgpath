@@ -74,8 +74,13 @@ function draw() {
   for (const c of DATA.containers) {
     const g = el("g", {class:"container"});
     if (c.kind === "as") {
-      g.appendChild(el("rect", {class:"asbox", x:c.x, y:c.y, width:c.w, height:c.h, rx:10, stroke:colorFor(c.label)}));
-      const t = el("text", {class:"boxtitle", x:c.x+8, y:c.y+14});
+      const pts = (c.hull || []).map(p => p.join(",")).join(" ");
+      if (c.hull && c.hull.length >= 3) {
+        g.appendChild(el("polygon", {class:"asbox", points:pts, stroke:colorFor(c.label)}));
+      } else {
+        g.appendChild(el("rect", {class:"asbox", x:c.x, y:c.y, width:c.w, height:c.h, rx:10, stroke:colorFor(c.label)}));
+      }
+      const t = el("text", {class:"boxtitle", x:c.lx != null ? c.lx : c.x+8, y:c.ly != null ? c.ly : c.y+14});
       const asName = c.info.name ? (c.info.name.length > 20 ? c.info.name.slice(0, 19) + "…" : c.info.name) : "";
       t.textContent = c.label + (asName ? "  " + asName : "");
       g.appendChild(t);
@@ -83,14 +88,14 @@ function draw() {
       if (viaIx) {
         const names = c.info.ixps.map(x => x.name).slice(0, 2);
         const more = c.info.ixps.length - names.length;
-        const s = el("text", {class:"boxsub", x:c.x+8, y:c.y+26});
+        const s = el("text", {class:"boxsub", x:c.lx != null ? c.lx : c.x+8, y:(c.ly != null ? c.ly : c.y+14)+12});
         s.textContent = "via " + names.join(", ") + (more > 0 ? ` +${more}` : "");
         g.appendChild(s);
       } else if (c.info.facilities && c.info.facilities.length) {
         const n = c.info.facilities.length;
         const first = c.info.facilities[0].name;
         const short = first.length > 20 ? first.slice(0, 19) + "…" : first;
-        const s = el("text", {class:"boxsub", x:c.x+8, y:c.y+26});
+        const s = el("text", {class:"boxsub", x:c.lx != null ? c.lx : c.x+8, y:(c.ly != null ? c.ly : c.y+14)+12});
         s.textContent = "near " + short + (n > 1 ? ` +${n-1}` : "");
         g.appendChild(s);
       }
@@ -98,7 +103,12 @@ function draw() {
       g.addEventListener("mousemove", ev => tip(ev, "AS container · " + c.label + (hasHandoff ? " · suspected handoff" : "")));
       g.addEventListener("click", ev => { ev.stopPropagation(); showAs(c); });
     } else {
-      g.appendChild(el("rect", {class:"machinebox", x:c.x, y:c.y, width:c.w, height:c.h, rx:8}));
+      const pts = (c.hull || []).map(p => p.join(",")).join(" ");
+      if (c.hull && c.hull.length >= 3) {
+        g.appendChild(el("polygon", {class:"machinebox", points:pts}));
+      } else {
+        g.appendChild(el("rect", {class:"machinebox", x:c.x, y:c.y, width:c.w, height:c.h, rx:8}));
+      }
       g.addEventListener("mousemove", ev => tip(ev, "same machine"));
     }
     g.addEventListener("mouseleave", hideTip);
@@ -189,6 +199,16 @@ function showHop(h) {
                           ["IXPs (AS)", h.total_ixps ? h.relevant_ixps.length + " suspected / " + h.total_ixps : null],
                           ["facilities (AS)", h.total_facilities ? h.relevant_facilities.length + " suspected / " + h.total_facilities : null]]));
   const a = link(h.source_url); if (a) panel.appendChild(a);
+  const gs = h.geo_sources || {};
+  const gkeys = Object.keys(gs);
+  if (gkeys.length) {
+    panel.appendChild(title("location sources · " + gkeys.length));
+    for (const k of gkeys) {
+      const v = gs[k];
+      const where = [v.city, v.country].filter(Boolean).join(", ") || "?";
+      panel.appendChild(item(k + " · " + where, null));
+    }
+  }
   panel.appendChild(title("TTL trust · " + (h.ttl_confidence || "unknown")));
   panel.appendChild(rows([["probe ttl", h.ttl], ["seen by flows", h.ttl_flows],
                           ["icmp reply ttl", h.ttl_reply], ["return hops", h.ttl_return_hops]]));

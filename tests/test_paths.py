@@ -271,6 +271,28 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(data["count"], 2)
 
 
+class GeoConsensusTest(unittest.TestCase):
+    def test_consensus_over_sources(self):
+        table = {
+            "ipwho.is": {"city": "Santiago", "country": "CL", "latitude": -33.4, "longitude": -70.6},
+            "ip.guide": {"city": "Santiago", "country": "CL", "latitude": -33.5, "longitude": -70.7},
+            "ripestat.geoloc": {"locations": [{"city": "Santiago", "country": "CL", "latitude": -33.45, "longitude": -70.65, "covered_percentage": 100.0}]},
+            "cymru.origin": {"records": [{"country": "CL"}]},
+            "rdap": {"country": "cl"},
+        }
+        saved = query.fetch_parsed
+        query.fetch_parsed = lambda aid, ip="", context=None: table.get(aid, {})
+        try:
+            result = query.geo_all("1.2.3.4")
+        finally:
+            query.fetch_parsed = saved
+        self.assertEqual(result["geo"]["city"], "Santiago")
+        self.assertEqual(result["geo"]["country"], "CL")
+        self.assertAlmostEqual(result["geo"]["latitude"], -33.45)
+        self.assertIn("ipwho.is", result["sources"])
+        self.assertIn("cymru.origin", result["sources"])
+
+
 class AliasTest(unittest.TestCase):
     def test_router_token_strips_interface(self):
         self.assertEqual(alias.router_token("ae5.cr2.scl1.example.net"), ("cr2", "scl1.example.net"))
@@ -374,6 +396,7 @@ class ExportTest(unittest.TestCase):
         as1 = next(c for c in data["containers"] if c["label"] == "AS1")
         self.assertEqual(as1["info"]["total_ixps"], 2)
         self.assertEqual([x["name"] for x in as1["info"]["ixps"]], ["IX-A"])
+        self.assertGreaterEqual(len(as1["hull"]), 3)
 
 
 if __name__ == "__main__":

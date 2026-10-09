@@ -96,7 +96,11 @@ def _add_origin(conn, run_id, graph, ip, asn, source, prefix=None):
 def _set_node_attrs(conn, graph, layer: str, key: str, extra: dict) -> None:
     if key in graph:
         graph.nodes[key].update(extra)
-    attrs = {k: v for k, v in graph.nodes.get(key, {}).items() if k != "layer"}
+    attrs = {
+        k: (sorted(v) if isinstance(v, set) else v)
+        for k, v in graph.nodes.get(key, {}).items()
+        if k != "layer"
+    }
     attrs.update(extra)
     store.add_node(conn, layer, key, attrs)
 
@@ -118,10 +122,11 @@ def expand_geo(conn, run_id, graph, budget: int = 20) -> int:
         node for node, data in graph.nodes(data=True) if data.get("layer", "interface") == "interface"
     ]
     for ip in interfaces[:budget]:
-        loc = query.geo(ip)
-        if not loc:
+        result = query.geo_all(ip)
+        geo = result.get("geo")
+        if not geo:
             continue
-        _set_node_attrs(conn, graph, "interface", ip, {"geo": loc})
+        _set_node_attrs(conn, graph, "interface", ip, {"geo": geo, "geo_sources": result.get("sources") or {}})
         located += 1
     return located
 

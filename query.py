@@ -84,13 +84,7 @@ def as_name(asn) -> str | None:
 
 
 def _geo_from(adapter_id: str, parsed: dict) -> dict | None:
-    if adapter_id in ("maxmind.geolite2", "dbip.lite"):
-        loc = {"city": parsed.get("city"), "country": parsed.get("country"),
-               "latitude": parsed.get("latitude"), "longitude": parsed.get("longitude")}
-    elif adapter_id == "ipwho.is":
-        loc = {"city": parsed.get("city"), "country": parsed.get("country"),
-               "latitude": parsed.get("latitude"), "longitude": parsed.get("longitude")}
-    elif adapter_id == "ipinfo":
+    if adapter_id in ("maxmind.geolite2", "dbip.lite", "ipwho.is", "ipinfo", "ip.guide", "shodan.host"):
         loc = {"city": parsed.get("city"), "country": parsed.get("country"),
                "latitude": parsed.get("latitude"), "longitude": parsed.get("longitude")}
     elif adapter_id == "ripestat.geoloc":
@@ -114,8 +108,24 @@ def _geo_from(adapter_id: str, parsed: dict) -> dict | None:
     return {**loc, "source": adapter_id}
 
 
+GEO_ADAPTERS = (
+    "maxmind.geolite2", "dbip.lite", "ipwho.is", "ip.guide",
+    "ipinfo", "shodan.host", "ripestat.geoloc", "ipmap",
+)
+COUNTRY_ADAPTERS = ("cymru.origin", "rdap")
+
+
+def _country_from(adapter_id: str, parsed: dict) -> str | None:
+    if adapter_id == "cymru.origin":
+        records = parsed.get("records") or []
+        return records[0].get("country") if records else None
+    if adapter_id == "rdap":
+        return parsed.get("country")
+    return None
+
+
 def geo(ip: str) -> dict | None:
-    for adapter_id in ("maxmind.geolite2", "dbip.lite", "ipwho.is", "ipmap", "ripestat.geoloc"):
+    for adapter_id in GEO_ADAPTERS:
         try:
             parsed = fetch_parsed(adapter_id, ip)
         except Exception:
@@ -124,6 +134,77 @@ def geo(ip: str) -> dict | None:
         if loc:
             return loc
     return None
+
+
+def geo_all(ip: str) -> dict:
+    sources: dict[str, dict] = {}
+    for adapter_id in GEO_ADAPTERS:
+        try:
+            parsed = fetch_parsed(adapter_id, ip)
+        except Exception:
+            continue
+        loc = _geo_from(adapter_id, parsed)
+        if loc:
+            sources[adapter_id] = loc
+    for adapter_id in COUNTRY_ADAPTERS:
+        try:
+            parsed = fetch_parsed(adapter_id, ip)
+        except Exception:
+            continue
+        country = _country_from(adapter_id, parsed)
+        if country:
+            sources[adapter_id] = {"city": None, "country": country, "latitude": None,
+                                   "longitude": None, "source": adapter_id}
+    if not sources:
+        return {"geo": None, "sources": {}}
+
+    cities: dict[str, list[str]] = {}
+    for loc in sources.values():
+        city = (loc.get("city") or "").strip()
+        if city:
+            cities.setdefault(city.casefold(), []).append(city)
+
+    consensus_city = None
+    if cities:
+        key = max(cities, key=lambda k: len(cities[k]))
+        consensus_city = cities[key][0]
+
+    def country_vote(values: list) -> str | None:
+        counts: dict[str, int] = {}
+        for raw in values:
+            code = (raw or "").strip().upper()
+            if code:
+                counts[code] = counts.get(code, 0) + 1
+        if not counts:
+            return None
+        return max(counts, key=lambda code: (counts[code], len(code) == 2))
+
+    if consensus_city:
+        city_countries = [
+            loc.get("country") for loc in sources.values()
+            if (loc.get("city") or "").strip().casefold() == consensus_city.casefold()
+        ]
+        consensus_country = country_vote(city_countries)
+    else:
+        consensus_country = country_vote([loc.get("country") for loc in sources.values()])
+
+    points = [
+        (loc["latitude"], loc["longitude"])
+        for loc in sources.values()
+        if loc.get("latitude") is not None
+        and (not consensus_city or (loc.get("city") or "").strip().casefold() == consensus_city.casefold())
+    ]
+    latitude = sum(p[0] for p in points) / len(points) if points else None
+    longitude = sum(p[1] for p in points) / len(points) if points else None
+
+    geo = {
+        "city": consensus_city,
+        "country": consensus_country,
+        "latitude": latitude,
+        "longitude": longitude,
+        "source": "consensus",
+    }
+    return {"geo": geo, "sources": sources}
 
 
 def atlas_probes(asn) -> dict | None:

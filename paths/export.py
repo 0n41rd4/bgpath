@@ -111,6 +111,55 @@ def _collectors(edges: list[dict], nodes: dict[str, dict]) -> dict[str, dict]:
     return out
 
 
+def _hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list[tuple[float, float]] = []
+    for point in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    upper: list[tuple[float, float]] = []
+    for point in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    return lower[:-1] + upper[:-1]
+
+
+def _shape(position: dict[str, tuple[float, float]], members: list[str], pad: float, header: float = 16) -> dict:
+    xs: list[float] = []
+    ys: list[float] = []
+    points: list[tuple[float, float]] = []
+    for ip in members:
+        if ip not in position:
+            continue
+        x, y = position[ip]
+        xs.append(x)
+        ys.append(y)
+        for dx, dy in ((0, 0), (W, 0), (0, H), (W, H)):
+            px = x - pad if dx == 0 else x + W + pad
+            py = y - pad - header if dy == 0 else y + H + pad
+            points.append((round(px, 1), round(py, 1)))
+    box = {
+        "x": min(xs) - pad,
+        "y": min(ys) - pad - header,
+        "w": max(xs) - min(xs) + W + 2 * pad,
+        "h": max(ys) - min(ys) + H + 2 * pad + header,
+    }
+    return {
+        **box,
+        "hull": [[p[0], p[1]] for p in _hull(points)],
+        "lx": min(xs) - pad + 8,
+        "ly": min(ys) - pad - header + 14,
+    }
+
+
 def build(conn, run_id: str) -> dict:
     run, nodes, edges = _load(conn, run_id)
     target = run.get("target")
@@ -325,6 +374,7 @@ def build(conn, run_id: str) -> dict:
                 "total_ixps": len(as_ix.get(asn, {})),
                 "total_facilities": len(as_fac.get(asn, {})),
                 "geo": attrs.get("geo"),
+                "geo_sources": attrs.get("geo_sources") or {},
                 "rtt_ms": rtt_of.get(ip),
                 "rtt_km_upper": analysis.rtt_km_upper(rtt_of.get(ip)),
                 "long_haul": ip == long_haul,
@@ -339,16 +389,6 @@ def build(conn, run_id: str) -> dict:
                 "source_url": attrs.get("source_url") or f"https://stat.ripe.net/{ip}",
             }
         )
-
-    def box(members: list[str], pad: float, header: float = 16) -> dict:
-        xs = [position[ip][0] for ip in members if ip in position]
-        ys = [position[ip][1] for ip in members if ip in position]
-        return {
-            "x": min(xs) - pad,
-            "y": min(ys) - pad - header,
-            "w": max(xs) - min(xs) + W + 2 * pad,
-            "h": max(ys) - min(ys) + H + 2 * pad + header,
-        }
 
     containers = []
     as_members: dict[str, list[str]] = {}
@@ -375,13 +415,13 @@ def build(conn, run_id: str) -> dict:
             "source_url": f"https://stat.ripe.net/{asn}",
         }
         header = 30 if (info["ixps"] or info["facilities"]) else 16
-        containers.append({"id": f"as:{asn}", "kind": "as", "label": asn, **box(members, 12, header), "info": info})
+        containers.append({"id": f"as:{asn}", "kind": "as", "label": asn, **_shape(position, members, 12, header), "info": info})
 
     machine_members: dict[str, list[str]] = {}
     for ip, machine in machine_of.items():
         machine_members.setdefault(machine, []).append(ip)
     for machine, members in sorted(machine_members.items()):
-        containers.append({"id": f"machine:{machine}", "kind": "machine", "label": "same machine", **box(members, 6), "info": {}})
+        containers.append({"id": f"machine:{machine}", "kind": "machine", "label": "same machine", **_shape(position, members, 6), "info": {}})
 
     return {
         "run": run,
