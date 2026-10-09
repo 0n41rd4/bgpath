@@ -170,6 +170,23 @@ connects every hop at TTL *n* to every hop at the next observed TTL within a flo
 fan-out/fan-in instead of a single line. Standard single-reply traces are
 unaffected (1×1).
 
+## One row per tool
+
+`paths html <run-id> ...` renders several runs **stacked in rows**, one graph per
+run, so paths from different tools can be compared at a glance — a tool whose
+path diverges from the others is immediately visible:
+
+```sh
+.venv/bin/python -m paths --db paths.db html --target 8.8.8.8 -o paths.html
+```
+
+`--target` picks the latest run per tool for that target and stacks them; passing
+explicit run ids stacks those in order. The panel summarises every row (tool,
+hops/edges, TTL-trust counts) then aggregates the BGP sessions, collectors,
+facilities and IXPs across them. Runs of the same tool that observed the same
+adjacency can instead be merged into one row via `ingest --run-id` (the union of
+flows/protocols/tools collapses to one edge).
+
 ## Testing & rate limits
 
 Repeated runs would hammer RIPEstat / PeeringDB / RouteViews, so source-analysis

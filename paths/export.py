@@ -467,6 +467,19 @@ def _embed(data: dict) -> str:
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
-def render_html(conn, run_id: str) -> str:
+def build_graphs(conn, run_ids: list[str]) -> dict:
+    graphs = []
+    for run_id in run_ids:
+        data = build(conn, run_id)
+        run = data.get("run") or {}
+        data["run_id"] = run_id
+        data["label"] = f"{run.get('tool') or '?'} · {run.get('target') or '?'}"
+        graphs.append(data)
+    return {"graphs": graphs}
+
+
+def render_html(conn, run_ids) -> str:
+    if isinstance(run_ids, str):
+        run_ids = [run_ids]
     template = TEMPLATE.read_text()
-    return template.replace("/*__PATHS_DATA__*/", _embed(build(conn, run_id)))
+    return template.replace("/*__PATHS_DATA__*/", _embed(build_graphs(conn, list(run_ids))))

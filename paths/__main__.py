@@ -212,19 +212,27 @@ def cmd_topology(args) -> int:
 
 def cmd_html(args) -> int:
     conn = store.open_store(args.db)
-    run_id = args.run_id
-    if not run_id:
+    run_ids = list(args.run_id or [])
+    if not run_ids and args.target:
+        rows = conn.execute(
+            "SELECT run_id, tool FROM runs WHERE target = ? ORDER BY started_at", (args.target,)
+        ).fetchall()
+        by_tool: dict[str, str] = {}
+        for run_id, tool in rows:
+            by_tool[tool or "?"] = run_id
+        run_ids = list(by_tool.values())
+    if not run_ids:
         row = conn.execute("SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
         if not row:
             print("no runs")
             conn.close()
             return 1
-        run_id = row[0]
-    html = paths_export.render_html(conn, run_id)
-    out = args.output or f"{run_id.replace('@', '_').replace(':', '')}.html"
+        run_ids = [row[0]]
+    html = paths_export.render_html(conn, run_ids)
+    out = args.output or f"{run_ids[0].replace('@', '_').replace(':', '')}.html"
     with open(out, "w") as handle:
         handle.write(html)
-    print(f"wrote {out}  ({len(html)} bytes)")
+    print(f"wrote {out}  ({len(html)} bytes, {len(run_ids)} graph(s))")
     conn.close()
     return 0
 
@@ -268,8 +276,9 @@ def main(argv: list[str] | None = None) -> int:
     topo.add_argument("run_id")
     topo.set_defaults(func=cmd_topology)
 
-    html = sub.add_parser("html", help="render the graph as self-contained HTML")
-    html.add_argument("run_id", nargs="?")
+    html = sub.add_parser("html", help="render graph(s) as self-contained HTML")
+    html.add_argument("run_id", nargs="*", help="run id(s); omit with --target for one row per tool")
+    html.add_argument("--target", help="render the latest run per tool for this target, stacked")
     html.add_argument("-o", "--output")
     html.set_defaults(func=cmd_html)
 
