@@ -241,6 +241,19 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(hops[0]["tool"], "mtr")
         self.assertEqual(hops[0]["protocol"], "icmp")
 
+    def test_parse_mtr_host_forms(self):
+        payload = {"report": {"mtr": {"dst": "8.8.8.8"}, "hubs": [
+            {"count": 1, "host": "gw (10.0.0.1)", "Avg": 0.5},
+            {"count": 2, "host": "72.14.194.218", "Avg": 5.0},
+            {"count": 3, "host": "no-such-host.invalid", "Avg": 6.0},
+        ]}}
+        hops = ingest.parse_mtr(payload)
+        self.assertEqual(hops[0]["src_ip"], "10.0.0.1")
+        self.assertEqual(hops[0]["name"], "gw")
+        self.assertEqual(hops[1]["src_ip"], "72.14.194.218")
+        self.assertIsNone(hops[2]["src_ip"])
+        self.assertEqual(hops[2]["name"], "no-such-host.invalid")
+
     def test_ingest_voyage_dispatch(self):
         hops = ingest.ingest_hops(str(VOYAGE_FIXTURE), "voyage")
         self.assertEqual(len(hops), 6)

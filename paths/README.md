@@ -143,11 +143,18 @@ External tools, ingested into the same run (`--run-id` appends, rebuilding the
 interface layer from all hops):
 
 ```sh
-mtr -j -c 5 8.8.8.8 > mtr.json
+mtr -n -j -c 5 8.8.8.8 > mtr.json
 traceroute -n 8.8.8.8 > tr.txt
 .venv/bin/python -m paths --db paths.db ingest mtr.json --tool mtr        --protocol icmp --run-id <id>
 .venv/bin/python -m paths --db paths.db ingest tr.txt  --tool traceroute --protocol udp  --run-id <id>
 ```
+
+Use `mtr -n` (or `-b`): mtr's JSON `host` is a display name and carries **no IP
+field**, so without `-n` most hops come back as hostnames/PTR names and can't be
+placed in the graph. The parser recovers an IP from `-b`'s `name (ip)` form and
+falls back to a forward DNS lookup for bare hostnames, but `-n` is the reliable
+choice. `traceroute -n` likewise avoids the same problem (the text parser also
+handles `name (ip)`).
 
 `--tool` accepts `mtr` (JSON), `traceroute` (text), `scamper` (JSON lines),
 `dublin` (JSON) and `voyage` (flat JSON array). Tools worth installing, each

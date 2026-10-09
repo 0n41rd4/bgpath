@@ -13,6 +13,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import socket
 
 import paths.probe as probe
 
@@ -50,16 +51,33 @@ def _hop(flow_id, ttl, src_ip, rtt_ms, name, protocol, tool):
     }
 
 
+def _mtr_host(host) -> tuple[str | None, str | None]:
+    if not host or host == "???":
+        return None, None
+    parenthesized = _PAREN_IP.search(host)
+    if parenthesized:
+        return parenthesized.group(1), host.split("(")[0].strip() or None
+    if _is_ip(host):
+        return host, None
+    try:
+        return socket.gethostbyname(host), host
+    except Exception:
+        return None, host
+
+
 def parse_mtr(payload: dict, tool: str = "mtr", protocol: str | None = "icmp", flow_id: int = 0) -> list[dict]:
     report = payload.get("report") if isinstance(payload.get("report"), dict) else payload
+    meta = report.get("mtr") if isinstance(report.get("mtr"), dict) else {}
+    dst = meta.get("dst")
     hops: list[dict] = []
     for hub in report.get("hubs") or []:
         if not isinstance(hub, dict):
             continue
-        host = hub.get("host")
-        src_ip = host if _is_ip(host) else None
+        src_ip, name = _mtr_host(hub.get("host"))
         rtt = hub.get("Avg")
-        hops.append(_hop(flow_id, hub.get("count"), src_ip, rtt, None if src_ip else host, protocol, tool))
+        hop = _hop(flow_id, hub.get("count"), src_ip, rtt, name, protocol, tool)
+        hop["is_last"] = bool(src_ip and dst and src_ip == dst)
+        hops.append(hop)
     return hops
 
 
