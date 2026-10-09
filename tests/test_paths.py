@@ -28,6 +28,7 @@ except Exception:
 
 FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "dublin_8.8.8.8.json"
 SCAMPER_FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "scamper_8.8.8.8.json"
+VOYAGE_FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "voyage_flat_8.8.8.8.jsonl"
 ANNOUNCE_FIXTURE = Path(__file__).parent / "fixtures" / "others" / "routeviews_announcements.json"
 
 
@@ -58,6 +59,32 @@ class ScamperTest(unittest.TestCase):
     def test_gap_preserved(self):
         ttls = sorted(h["ttl"] for h in scamper_hops() if h["flow_id"] == 40001)
         self.assertIn(2, [b - a for a, b in zip(ttls, ttls[1:])])
+
+
+def voyage_hops():
+    return probe.parse_voyage(VOYAGE_FIXTURE.read_text())
+
+
+class VoyageTest(unittest.TestCase):
+    def test_flows_and_protocol(self):
+        hops = voyage_hops()
+        self.assertEqual(sorted({hop["flow_id"] for hop in hops}), [24000, 24001])
+        self.assertEqual(hops[0]["protocol"], "icmp")
+        self.assertEqual(hops[0]["tool"], "voyage")
+
+    def test_rtt_and_reply(self):
+        hop = next(h for h in voyage_hops() if h["flow_id"] == 24000 and h["ttl"] == 1)
+        self.assertEqual(hop["src_ip"], "192.168.1.254")
+        self.assertAlmostEqual(hop["rtt_ms"], 0.5)
+        self.assertEqual(hop["reply_ttl"], 254)
+
+    @unittest.skipUnless(HAVE_NX, "networkx not installed")
+    def test_multipath_fan(self):
+        graph = graphlib.interface_graph(voyage_hops())
+        successors = set(graph.successors("192.168.1.254"))
+        self.assertEqual(successors, {"10.0.0.1", "10.0.0.2"})
+        self.assertEqual(set(graph.predecessors("8.8.8.8")), {"10.0.0.1", "10.0.0.2"})
+        self.assertIn("192.168.1.254", graphlib.ecmp_nodes(graph))
 
 
 class ProbeTest(unittest.TestCase):
@@ -213,6 +240,11 @@ class IngestTest(unittest.TestCase):
         self.assertIsNone(hops[1]["src_ip"])
         self.assertEqual(hops[0]["tool"], "mtr")
         self.assertEqual(hops[0]["protocol"], "icmp")
+
+    def test_ingest_voyage_dispatch(self):
+        hops = ingest.ingest_hops(str(VOYAGE_FIXTURE), "voyage")
+        self.assertEqual(len(hops), 6)
+        self.assertEqual(hops[0]["tool"], "voyage")
 
     def test_parse_traceroute(self):
         text = "traceroute to 8.8.8.8\n 1  _gateway (192.168.1.1)  0.532 ms  0.4 ms\n 2  * * *\n 3  8.8.8.8  5.1 ms\n"

@@ -24,11 +24,10 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
     for hop in hops:
         by_flow.setdefault(hop["flow_id"], []).append(hop)
     for flow_id, entries in by_flow.items():
-        answered = sorted(
-            (hop for hop in entries if hop.get("src_ip")),
-            key=lambda hop: hop["ttl"] if hop["ttl"] is not None else 0,
-        )
-        for hop in answered:
+        levels: dict[int, dict[str, dict]] = {}
+        for hop in entries:
+            if not hop.get("src_ip"):
+                continue
             graph.add_node(hop["src_ip"])
             data = graph.nodes[hop["src_ip"]]
             data.setdefault("protocols", set())
@@ -37,13 +36,20 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
                 data["protocols"].add(hop["protocol"])
             if hop.get("tool"):
                 data["tools"].add(hop["tool"])
-        for previous, current in zip(answered, answered[1:]):
-            span = (
-                current["ttl"] - previous["ttl"]
-                if previous["ttl"] is not None and current["ttl"] is not None
-                else 1
-            )
-            _add_edge(graph, previous["src_ip"], current["src_ip"], flow_id, current, span)
+            ttl = hop["ttl"] if hop["ttl"] is not None else 0
+            level = levels.setdefault(ttl, {})
+            previous = level.get(hop["src_ip"])
+            if previous is None or (
+                hop["rtt_ms"] is not None and (previous["rtt_ms"] is None or hop["rtt_ms"] < previous["rtt_ms"])
+            ):
+                level[hop["src_ip"]] = hop
+        ttls = sorted(levels)
+        for a_ttl, b_ttl in zip(ttls, ttls[1:]):
+            span = b_ttl - a_ttl
+            sources = list(levels[a_ttl].values())[:16]
+            for current in list(levels[b_ttl].values())[:16]:
+                for previous in sources:
+                    _add_edge(graph, previous["src_ip"], current["src_ip"], flow_id, current, span)
     return graph
 
 

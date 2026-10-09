@@ -19,7 +19,7 @@ import paths.probe as probe
 _TTL_RE = re.compile(r"^\s*(\d+)\s+(.*)$")
 _PAREN_IP = re.compile(r"\(([0-9a-fA-F:.]+)\)")
 _MS = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*ms")
-TOOLS = ("mtr", "traceroute", "scamper", "dublin")
+TOOLS = ("mtr", "traceroute", "scamper", "dublin", "voyage")
 
 
 def _is_ip(value: str | None) -> bool:
@@ -100,4 +100,6 @@ def ingest_hops(path: str, tool: str, protocol: str | None = None) -> list[dict]
         return probe.parse_scamper([obj for obj in objects if obj.get("type") == "trace"])
     if tool == "dublin":
         return probe.parse_dublin(json.loads(text))
+    if tool == "voyage":
+        return probe.parse_voyage(text)
     raise ValueError(f"unknown tool: {tool}")

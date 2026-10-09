@@ -149,12 +149,26 @@ traceroute -n 8.8.8.8 > tr.txt
 .venv/bin/python -m paths --db paths.db ingest tr.txt  --tool traceroute --protocol udp  --run-id <id>
 ```
 
-`--tool` accepts `mtr` (JSON), `traceroute` (text), `scamper` (JSON lines) and
-`dublin` (JSON). Tools worth installing, each adding a different vantage on
-ECMP/middleboxes: `mtr`, `traceroute`, `paris-traceroute`, `tracebox`, `hping3`,
-`nping`; `scamper` and `dublin-traceroute` are already used. Different protocols
-routinely take different paths (e.g. ICMP vs UDP to 8.8.8.8 hit different Google
-edges), which is exactly the signal aggregation exposes.
+`--tool` accepts `mtr` (JSON), `traceroute` (text), `scamper` (JSON lines),
+`dublin` (JSON) and `voyage` (flat JSON array). Tools worth installing, each
+adding a different vantage on ECMP/middleboxes: `mtr`, `traceroute`,
+`hping3`, `nping`; `scamper` and `dublin-traceroute` are already used. Different
+protocols routinely take different paths (e.g. ICMP vs UDP to 8.8.8.8 hit
+different Google edges), which is exactly the signal aggregation exposes.
+
+**Voyage** (maintained Rust Paris successor, Diamond-Miner multipath) can also be
+run directly:
+
+```sh
+.venv/bin/python -m paths --db paths.db trace 8.8.8.8 --tool voyage --protocols icmp --maxttl 16 --enrich
+```
+
+or its `flat` output ingested like any other tool. Its Diamond Miner discovers
+load-balanced paths, so the interface graph grows into a **DAG**: the graph layer
+connects every hop at TTL *n* to every hop at the next observed TTL within a flow
+(a bipartite fan), turning a load balancer's multiple successors into real
+fan-out/fan-in instead of a single line. Standard single-reply traces are
+unaffected (1×1).
 
 ## Testing & rate limits
 

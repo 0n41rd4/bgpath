@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
 
     trace = sub.add_parser("trace", parents=[common], help="capture a trace and build the graph")
     trace.add_argument("target")
-    trace.add_argument("--tool", choices=["scamper", "dublin"], default="scamper")
+    trace.add_argument("--tool", choices=["scamper", "dublin", "voyage"], default="scamper")
     trace.add_argument("--protocols", default="udp", help="comma-separated Paris protocols: udp,icmp,tcp")
     trace.add_argument("--flows", type=int, default=4)
     trace.add_argument("--maxttl", type=int, default=20)

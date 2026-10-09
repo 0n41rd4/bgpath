@@ -22,9 +22,11 @@ import time
 
 DUBLIN = "dublin-traceroute"
 SCAMPER = "scamper"
-TOOLS = {"scamper": SCAMPER, "dublin": DUBLIN}
+VOYAGE = "voyage"
+TOOLS = {"scamper": SCAMPER, "dublin": DUBLIN, "voyage": VOYAGE}
 PARIS = {"udp": "udp-paris", "icmp": "icmp-paris", "tcp": "tcp-ack"}
 PROTOCOLS = tuple(PARIS)
+VOYAGE_PROTOCOLS = {0: "icmp", 1: "icmp6", 2: "tcp", 3: "udp"}
 
 _sudo_cache: list[str] | None = None
 
@@ -177,6 +179,91 @@ def parse_dublin(payload: dict) -> list[dict]:
     return hops
 
 
+def _voyage_reply_hop(flow_id, ttl, reply, protocol):
+    rtt = reply.get("rtt")
+    return {
+        "flow_id": flow_id,
+        "ttl": ttl,
+        "src_ip": reply.get("addr"),
+        "probe_src": None,
+        "rtt_ms": rtt,
+        "icmp_type": reply.get("icmp_type"),
+        "icmp_code": reply.get("icmp_code"),
+        "reply_ttl": reply.get("ttl"),
+        "ip_id": None,
+        "nat_id": None,
+        "mpls": reply.get("mpls_labels") or [],
+        "is_last": False,
+        "name": None,
+        "protocol": protocol,
+        "tool": VOYAGE,
+    }
+
+
+def _voyage_flat_hop(obj):
+    rtt = obj.get("rtt")
+    return {
+        "flow_id": obj.get("probe_src_port"),
+        "ttl": obj.get("probe_ttl"),
+        "src_ip": obj.get("reply_src_addr"),
+        "probe_src": obj.get("probe_src_addr"),
+        "rtt_ms": rtt / 10.0 if isinstance(rtt, (int, float)) else None,
+        "icmp_type": obj.get("reply_icmp_type"),
+        "icmp_code": obj.get("reply_icmp_code"),
+        "reply_ttl": obj.get("reply_ttl"),
+        "ip_id": None,
+        "nat_id": None,
+        "mpls": obj.get("reply_mpls_labels") or [],
+        "is_last": obj.get("reply_src_addr") == obj.get("probe_dst_addr"),
+        "name": None,
+        "protocol": VOYAGE_PROTOCOLS.get(obj.get("probe_protocol")),
+        "tool": VOYAGE,
+    }
+
+
+def parse_voyage(text: str) -> list[dict]:
+    hops: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line[0] not in "[{":
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        objects = payload if isinstance(payload, list) else [payload]
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            if "probe_ttl" in obj:
+                hops.append(_voyage_flat_hop(obj))
+            elif "flows" in obj:
+                protocol = str(obj.get("protocol") or "").lower() or None
+                for flow in obj.get("flows") or []:
+                    for hop in flow.get("hops") or []:
+                        for probe in hop.get("probes") or []:
+                            reply = probe.get("reply")
+                            if reply:
+                                hops.append(_voyage_reply_hop(flow.get("src_port"), hop.get("ttl"), reply, protocol))
+    hops.sort(key=lambda hop: (hop["flow_id"] or 0, hop["ttl"] or 0))
+    return hops
+
+
+def capture_voyage(target: str, max_ttl: int = 32, protocol: str = "icmp", timeout: int = 300) -> str:
+    if not available("voyage"):
+        raise RuntimeError(f"{VOYAGE} not found on PATH")
+    result = subprocess.run(
+        [VOYAGE, "--dst-addr", target, "--output-format", "flat",
+         "--min-ttl", "1", "--max-ttl", str(max_ttl), "--protocol", protocol],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0 and not result.stdout.strip():
+        raise RuntimeError(result.stderr.strip() or "voyage failed (needs cap_net_raw,cap_net_admin)")
+    return result.stdout
+
+
 def run(
     target: str,
     flows: int = 4,
@@ -187,13 +274,16 @@ def run(
 ) -> tuple[str, list[dict], dict]:
     if tool == "dublin":
         hops = parse_dublin(capture_dublin(target, flows=flows, max_ttl=max_ttl, timeout=timeout))
+    elif tool == "voyage":
+        protocol = protocols[0] if protocols else "icmp"
+        hops = parse_voyage(capture_voyage(target, max_ttl=max_ttl, protocol=protocol, timeout=timeout))
     else:
         hops = parse_scamper(capture_scamper(target, flows=flows, max_ttl=max_ttl, timeout=timeout, protocols=protocols))
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     vantage = next((hop["probe_src"] for hop in hops if hop.get("probe_src")), None)
     meta = {
         "tool": TOOLS.get(tool, tool),
-        "protocols": list(protocols) if tool != "dublin" else ["udp"],
+        "protocols": list(protocols) if tool in ("scamper", "voyage") else ["udp"],
         "flows": flows,
         "max_ttl": max_ttl,
         "flow_ids": sorted({hop["flow_id"] for hop in hops if hop["flow_id"] is not None}),
