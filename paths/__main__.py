@@ -11,6 +11,7 @@ import argparse
 import os
 import time
 
+import paths.analysis as analysis
 import paths.enrich as enrich
 import paths.export as paths_export
 import paths.graph as graphlib
@@ -78,6 +79,14 @@ def _report_interface(interface) -> None:
         print(f"    ECMP {node} -> {', '.join(nexts)}")
 
 
+def _report_reachability(conn, run_id, target) -> dict:
+    reach = analysis.reachability(store.load_hops(conn, run_id), target)
+    if not reach["reached"]:
+        detail = reach["error"] or "no reply"
+        print(f"  target not reached: last hop {reach['last_hop']} ttl {reach['last_ttl']} ({detail})")
+    return reach
+
+
 def cmd_trace(args) -> int:
     if args.no_cache:
         os.environ["PATHS_CACHE"] = "off"
@@ -115,6 +124,7 @@ def cmd_trace(args) -> int:
 
     print(f"run {run_id}  vantage {meta.get('vantage')}  flows {meta.get('flow_ids')}  protocols {meta.get('protocols')}")
     _report_interface(interface)
+    _report_reachability(conn, run_id, args.target)
     if args.enrich:
         _enrich(conn, run_id, interface, args)
     conn.close()
@@ -124,14 +134,6 @@ def cmd_trace(args) -> int:
 def cmd_ingest(args) -> int:
     if args.no_cache:
         os.environ["PATHS_CACHE"] = "off"
-    try:
-        hops = ingest.ingest_hops(args.file, args.tool, args.protocol)
-    except Exception as exc:
-        print(f"ingest failed: {exc}")
-        return 1
-    if not hops:
-        print("no hops in file")
-        return 1
     conn = store.open_store(args.db)
     run_id = args.run_id
     if run_id:
@@ -144,6 +146,16 @@ def cmd_ingest(args) -> int:
             conn.close()
             return 1
         run_id = _run_id(target)
+    try:
+        hops = ingest.ingest_hops(args.file, args.tool, args.protocol, target)
+    except Exception as exc:
+        print(f"ingest failed: {exc}")
+        conn.close()
+        return 1
+    if not hops:
+        print("no hops in file")
+        conn.close()
+        return 1
     if not conn.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone():
         vantage = args.vantage or next((hop.get("probe_src") for hop in hops if hop.get("probe_src")), None)
         store.save_run(
@@ -163,6 +175,7 @@ def cmd_ingest(args) -> int:
     interface = _build_interface(conn, run_id)
     print(f"run {run_id}  ingested {len(hops)} hops from {args.tool}{'/' + args.protocol if args.protocol else ''}")
     _report_interface(interface)
+    _report_reachability(conn, run_id, target)
     if args.enrich:
         _enrich(conn, run_id, interface, args)
     conn.close()

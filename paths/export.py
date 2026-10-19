@@ -73,12 +73,16 @@ def _hop_ttl(conn, run_id: str) -> dict[str, int]:
 
 def _raw_hops(conn, run_id: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT flow_id, ttl, src_ip, reply_ttl, rtt_ms FROM hops WHERE run_id = ? AND src_ip IS NOT NULL",
+        "SELECT flow_id, ttl, src_ip, reply_ttl, rtt_ms, icmp_type, icmp_code, is_last "
+        "FROM hops WHERE run_id = ? AND src_ip IS NOT NULL",
         (run_id,),
     ).fetchall()
     return [
-        {"flow_id": flow, "ttl": ttl, "src_ip": ip, "reply_ttl": reply, "rtt_ms": rtt}
-        for flow, ttl, ip, reply, rtt in rows
+        {
+            "flow_id": flow, "ttl": ttl, "src_ip": ip, "reply_ttl": reply, "rtt_ms": rtt,
+            "icmp_type": icmp_type, "icmp_code": icmp_code, "is_last": bool(is_last),
+        }
+        for flow, ttl, ip, reply, rtt, icmp_type, icmp_code, is_last in rows
     ]
 
 
@@ -170,8 +174,9 @@ def build(conn, run_id: str) -> dict:
     for edge in traversal:
         trace.add(edge["source"])
         trace.add(edge["target"])
-    if target:
-        trace.add(target)
+
+    raw_hops = _raw_hops(conn, run_id)
+    reach = analysis.reachability(raw_hops, target)
 
     as_of = {e["source"]: e["target"] for e in edges if e["layer"] == "origin" and e["source"] in trace}
     machine_of = {e["source"]: e["target"] for e in edges if e["layer"] == "machine" and e["source"] in trace}
@@ -181,7 +186,7 @@ def build(conn, run_id: str) -> dict:
         if nodes.get(ip, {}).get("attrs", {}).get("aliased_asns")
     }
 
-    trust = analysis.ttl_trust(_raw_hops(conn, run_id))
+    trust = analysis.ttl_trust(raw_hops)
     geo_of = {ip: nodes.get(ip, {}).get("attrs", {}).get("geo") for ip in trace}
     gap_before = {edge["target"] for edge in traversal if edge["attrs"].get("gap")}
     rtt_of = {ip: (trust.get(ip) or {}).get("rtt_ms") for ip in trace}
@@ -425,6 +430,7 @@ def build(conn, run_id: str) -> dict:
 
     return {
         "run": run,
+        "reachability": reach,
         "hops": hops,
         "containers": containers,
         "edges": out_edges,

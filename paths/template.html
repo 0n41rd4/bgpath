@@ -198,8 +198,11 @@ function draw() {
     drawGraph(g, row);
     viewport.appendChild(row);
     const lab = el("text", {class:"rowlabel", x:14, y:g._rowY - 18});
+    const reach = (g.reachability && !g.reachability.reached)
+      ? "   ·   TARGET NOT REACHED" + (g.reachability.error ? " (" + g.reachability.error + ")" : "")
+      : "";
     lab.textContent = (g.label || "?") + "   ·   vantage " + (g.vantage || "?") + "   ·   " + (g.started_at || "?")
-      + "   ·   " + g.hops.length + " hops · " + g.edges.length + " edges";
+      + "   ·   " + g.hops.length + " hops · " + g.edges.length + " edges" + reach;
     viewport.appendChild(lab);
   }
   if (DATA.vantage_mismatch) {
@@ -324,8 +327,10 @@ function summary() {
   for (const g of GRAPHS) {
     const low = g.hops.filter(h => h.ttl_confidence === "low").length;
     const med = g.hops.filter(h => h.ttl_confidence === "medium").length;
+    const reach = (g.reachability && !g.reachability.reached)
+      ? "  ·  unreached" + (g.reachability.error ? " " + g.reachability.error : "") : "";
     panel.appendChild(item((g.label || "?") + "  ·  " + g.hops.length + " hops, " + g.edges.length + " edges, " +
-      "ttl " + (g.hops.length - low - med) + "/" + med + "/" + low + "  ·  " + (g.vantage || "?") + " @ " + (g.started_at || "?"), null));
+      "ttl " + (g.hops.length - low - med) + "/" + med + "/" + low + "  ·  " + (g.vantage || "?") + " @ " + (g.started_at || "?") + reach, null));
   }
   const collectors = new Map();
   let sessions = 0, facilities = 0, ixps = 0;

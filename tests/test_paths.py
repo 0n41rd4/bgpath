@@ -226,6 +226,21 @@ class AnalysisTest(unittest.TestCase):
         self.assertTrue(analysis.facility_matches_place({"city": "Santiago", "country": "CL"}, santiago))
         self.assertFalse(analysis.facility_matches_place({"city": "Miami", "country": "US"}, santiago))
 
+    def test_reachability(self):
+        blocked = [
+            {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "icmp_type": 11, "icmp_code": 0},
+            {"flow_id": 1, "ttl": 2, "src_ip": "192.0.2.9", "icmp_type": 3, "icmp_code": 13},
+        ]
+        result = analysis.reachability(blocked, "8.8.8.8")
+        self.assertFalse(result["reached"])
+        self.assertEqual(result["last_hop"], "192.0.2.9")
+        self.assertEqual(result["error"], "!X")
+        reached = analysis.reachability(
+            blocked + [{"flow_id": 1, "ttl": 3, "src_ip": "8.8.8.8", "icmp_type": 3, "icmp_code": 3}],
+            "8.8.8.8",
+        )
+        self.assertTrue(reached["reached"])
+
 
 class IngestTest(unittest.TestCase):
     def test_parse_mtr(self):
@@ -253,6 +268,14 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(hops[1]["src_ip"], "72.14.194.218")
         self.assertIsNone(hops[2]["src_ip"])
         self.assertEqual(hops[2]["name"], "no-such-host.invalid")
+
+    def test_parse_traceroute_error_token(self):
+        text = " 1  10.0.0.1  1.0 ms\n 2  192.0.2.9  2.0 ms !X\n"
+        hops = ingest.parse_traceroute(text, target="8.8.8.8")
+        self.assertEqual((hops[1]["icmp_type"], hops[1]["icmp_code"]), (3, 13))
+        self.assertFalse(hops[1]["is_last"])
+        last = ingest.parse_traceroute(" 2  8.8.8.8  5.0 ms\n", target="8.8.8.8")
+        self.assertTrue(last[0]["is_last"])
 
     def test_ingest_voyage_dispatch(self):
         hops = ingest.ingest_hops(str(VOYAGE_FIXTURE), "voyage")
@@ -376,6 +399,21 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(edge["handoff"]["facilities"][0]["method"], "geo")
         hop = next(h for h in data["hops"] if h["id"] == "2.2.2.2")
         self.assertEqual(hop["ttl_confidence"], "medium")
+
+    def test_unreached_target_not_injected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            store.save_run(conn, {"run_id": "r1", "target": "8.8.8.8", "src_ip": "10.0.0.1", "tool": "traceroute", "started_at": "t"})
+            store.save_hops(conn, "r1", [
+                {"flow_id": 0, "ttl": 1, "src_ip": "10.0.0.1", "icmp_type": 11, "icmp_code": 0, "is_last": False},
+                {"flow_id": 0, "ttl": 2, "src_ip": "192.0.2.9", "icmp_type": 3, "icmp_code": 13, "is_last": False},
+            ])
+            store.add_edge(conn, "r1", "interface", "10.0.0.1", "192.0.2.9", ttl=2)
+            data = paths_export.build(conn, "r1")
+            conn.close()
+        self.assertFalse(data["reachability"]["reached"])
+        self.assertEqual(data["reachability"]["error"], "!X")
+        self.assertNotIn("8.8.8.8", [hop["id"] for hop in data["hops"]])
 
     def test_handoff_intersection_and_ixp_port(self):
         with tempfile.TemporaryDirectory() as tmp:

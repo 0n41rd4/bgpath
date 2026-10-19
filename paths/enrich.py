@@ -61,8 +61,13 @@ def target_ip(graph) -> str | None:
     return ips[-1] if ips else None
 
 
-def target_prefix(graph) -> str | None:
-    ip = target_ip(graph)
+def run_target(conn, run_id) -> str | None:
+    row = conn.execute("SELECT target FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    return row[0] if row else None
+
+
+def target_prefix(conn, run_id, graph) -> str | None:
+    ip = run_target(conn, run_id) or target_ip(graph)
     if not ip:
         return None
     try:
@@ -280,7 +285,7 @@ def expand_peeringdb(conn, run_id, graph, asns: set[str], cap: int = 200) -> tup
 
 
 def expand_sessions(conn, run_id, graph, cap: int = 40) -> dict:
-    prefix = target_prefix(graph)
+    prefix = target_prefix(conn, run_id, graph)
     if not prefix:
         return {"prefix": None, "sessions": 0, "collectors": 0}
     try:

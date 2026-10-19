@@ -20,6 +20,16 @@ import paths.probe as probe
 _TTL_RE = re.compile(r"^\s*(\d+)\s+(.*)$")
 _PAREN_IP = re.compile(r"\(([0-9a-fA-F:.]+)\)")
 _MS = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*ms")
+_ERROR_RE = re.compile(r"(![A-Za-z])")
+_ERROR_TOKENS = {
+    "!N": (3, 0),
+    "!H": (3, 1),
+    "!P": (3, 2),
+    "!F": (3, 4),
+    "!X": (3, 13),
+    "!S": (3, 5),
+    "!T": (11, 0),
+}
 TOOLS = ("mtr", "traceroute", "scamper", "dublin", "voyage")
 
 
@@ -65,10 +75,16 @@ def _mtr_host(host) -> tuple[str | None, str | None]:
         return None, host
 
 
-def parse_mtr(payload: dict, tool: str = "mtr", protocol: str | None = "icmp", flow_id: int = 0) -> list[dict]:
+def parse_mtr(
+    payload: dict,
+    tool: str = "mtr",
+    protocol: str | None = "icmp",
+    flow_id: int = 0,
+    target: str | None = None,
+) -> list[dict]:
     report = payload.get("report") if isinstance(payload.get("report"), dict) else payload
     meta = report.get("mtr") if isinstance(report.get("mtr"), dict) else {}
-    dst = meta.get("dst")
+    dst = meta.get("dst") or target
     hops: list[dict] = []
     for hub in report.get("hubs") or []:
         if not isinstance(hub, dict):
@@ -81,7 +97,13 @@ def parse_mtr(payload: dict, tool: str = "mtr", protocol: str | None = "icmp", f
     return hops
 
 
-def parse_traceroute(text: str, tool: str = "traceroute", protocol: str | None = None, flow_id: int = 0) -> list[dict]:
+def parse_traceroute(
+    text: str,
+    tool: str = "traceroute",
+    protocol: str | None = None,
+    flow_id: int = 0,
+    target: str | None = None,
+) -> list[dict]:
     hops: list[dict] = []
     for line in text.splitlines():
         match = _TTL_RE.match(line)
@@ -102,22 +124,33 @@ def parse_traceroute(text: str, tool: str = "traceroute", protocol: str | None =
             name = None
         rtt_match = _MS.search(rest)
         rtt = float(rtt_match.group(1)) if rtt_match else None
-        hops.append(_hop(flow_id, ttl, src_ip, rtt, name, protocol, tool))
+        hop = _hop(flow_id, ttl, src_ip, rtt, name, protocol, tool)
+        error = _ERROR_RE.search(rest)
+        if error:
+            hop["icmp_type"], hop["icmp_code"] = _ERROR_TOKENS.get(error.group(1).upper(), (None, None))
+        hop["is_last"] = bool(src_ip and target and src_ip == target)
+        hops.append(hop)
     return hops
 
 
-def ingest_hops(path: str, tool: str, protocol: str | None = None) -> list[dict]:
+def ingest_hops(path: str, tool: str, protocol: str | None = None, target: str | None = None) -> list[dict]:
     with open(path) as handle:
         text = handle.read()
     if tool == "mtr":
-        return parse_mtr(json.loads(text), protocol=protocol or "icmp")
-    if tool == "traceroute":
-        return parse_traceroute(text, protocol=protocol)
-    if tool == "scamper":
+        hops = parse_mtr(json.loads(text), protocol=protocol or "icmp", target=target)
+    elif tool == "traceroute":
+        hops = parse_traceroute(text, protocol=protocol, target=target)
+    elif tool == "scamper":
         objects = [json.loads(line) for line in text.splitlines() if line.strip()]
-        return probe.parse_scamper([obj for obj in objects if obj.get("type") == "trace"])
-    if tool == "dublin":
-        return probe.parse_dublin(json.loads(text))
-    if tool == "voyage":
-        return probe.parse_voyage(text)
-    raise ValueError(f"unknown tool: {tool}")
+        hops = probe.parse_scamper([obj for obj in objects if obj.get("type") == "trace"])
+    elif tool == "dublin":
+        hops = probe.parse_dublin(json.loads(text))
+    elif tool == "voyage":
+        hops = probe.parse_voyage(text)
+    else:
+        raise ValueError(f"unknown tool: {tool}")
+    if target:
+        for hop in hops:
+            if hop.get("src_ip") == target:
+                hop["is_last"] = True
+    return hops
