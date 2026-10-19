@@ -11,8 +11,7 @@ import json
 import time
 
 import cache
-import observe
-import sources
+from registry import observe, sources
 
 
 def _adapter(adapter_id: str) -> dict:

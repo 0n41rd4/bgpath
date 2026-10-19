@@ -16,8 +16,7 @@ import time
 import urllib.error
 import urllib.request
 
-import parsers
-import ripe
+from . import parsers, ripe
 
 TIMEOUT = 20
 USER_AGENT = "aranya/0.0"

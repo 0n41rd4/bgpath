@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aranya
 import compare
-import store
+from registry import store
 from test_pipeline import make_fetch
 
 

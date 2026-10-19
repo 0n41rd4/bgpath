@@ -15,10 +15,9 @@ import time
 
 import compare
 import export
-import observe
 import render
-import sources
-import store
+
+from registry import observe, sources, store
 import views
 
 DEFAULT_DB = "aranya.db"

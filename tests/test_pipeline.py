@@ -8,8 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aranya
-import sources
-import store
+from registry import sources, store
 
 RIPE = Path(__file__).parent / "fixtures" / "ripe"
 OTHERS = Path(__file__).parent / "fixtures" / "others"

@@ -12,7 +12,7 @@ import sqlite3
 
 import compare
 import entities
-import sources
+from registry import sources
 import views
 
 VERDICT_MARK = {"agree": "=", "single": "·", "spread": "~", "disagree": "!"}

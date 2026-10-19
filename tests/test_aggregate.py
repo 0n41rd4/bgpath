@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aggregate
-import store
+from registry import store
 
 
 def seed(conn, rows):

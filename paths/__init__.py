@@ -1,7 +1,7 @@
 """aranya.paths - path & topology exploration sub-project.
 
 Measurement and graph layers live here; source enrichment reuses aranya's
-adapters (sources/parsers/observe). The graph is kept topological: nodes and
+adapter registry (`registry/`). The graph is kept topological: nodes and
 edges are routers/interfaces/ASes/IXPs/facilities, and every geographic claim
 is an annotation, never a coordinate baked into the topology.
 """

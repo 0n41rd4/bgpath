@@ -11,7 +11,7 @@ import os
 import sqlite3
 
 import aggregate
-import sources
+from registry import sources
 import views
 
 SCHEMA_VERSION = 1

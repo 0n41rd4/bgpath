@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import ripe
+from registry import ripe
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ripe"
 

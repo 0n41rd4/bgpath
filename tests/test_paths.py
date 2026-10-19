@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bgp
-import parsers
+from registry import parsers
 import paths.alias as alias
 import paths.analysis as analysis
 import paths.enrich as enrich
