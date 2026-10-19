@@ -121,6 +121,25 @@ def save_observation(
     conn.commit()
 
 
+def delete_observations(conn: sqlite3.Connection, ip: str, source: str | None = None) -> None:
+    if source is None:
+        conn.execute("DELETE FROM observations WHERE ip = ?", (ip,))
+    else:
+        conn.execute("DELETE FROM observations WHERE ip = ? AND source = ?", (ip, source))
+    conn.commit()
+
+
+def clear(conn: sqlite3.Connection, ip: str | None = None) -> dict[str, int]:
+    where = " WHERE ip = ?" if ip else ""
+    params = (ip,) if ip else ()
+    observations = conn.execute(f"SELECT COUNT(*) FROM observations{where}", params).fetchone()[0]
+    fetches = conn.execute(f"SELECT COUNT(*) FROM fetches{where}", params).fetchone()[0]
+    conn.execute(f"DELETE FROM observations{where}", params)
+    conn.execute(f"DELETE FROM fetches{where}", params)
+    conn.commit()
+    return {"observations": observations, "fetches": fetches}
+
+
 _sink: sqlite3.Connection | None = None
 
 

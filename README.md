@@ -21,8 +21,14 @@ aranya 8.8.8.8 --dump                          # per-source raw output; dumps/la
 aranya 8.8.8.8 -v                              # per-source progress on stderr
 aranya --ips 8.8.8.8,1.1.1.1 --dump            # one timestamp folder, one subfolder per IP
 aranya --update-dbs                            # refresh the MaxMind/DB-IP .mmdb files
-python3 -m unittest discover -s tests          # 122 tests, fully offline
+aranya --clear                                 # empty the whole database and exit
+aranya --clear-ip 8.8.8.8                      # empty just that IP and exit
+python3 -m unittest discover -s tests          # 125 tests, fully offline
 ```
+
+Re-running an IP replaces that source's observations, so views do not accumulate
+duplicates; `fetches` are kept as raw history. `--clear` and `--clear-ip` remove
+both.
 
 `python3 aranya.py ...` still works from the checkout.
 

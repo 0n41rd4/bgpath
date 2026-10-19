@@ -67,6 +67,25 @@ class StoreTest(unittest.TestCase):
             conn.close()
         self.assertEqual(row, ("src", "body", "8.8.8.8"))
 
+    def test_clear_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            for ip, asn in (("1.1.1.1", "1"), ("2.2.2.2", "2")):
+                store.save_fetch(conn, "src", "http://example", 200, "{}", None, ip)
+                store.save_observation(conn, ip, "src", "up", "reported", "ownership", "asn", asn)
+            cleared = store.clear(conn, "1.1.1.1")
+            observations = conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+            fetches = conn.execute("SELECT COUNT(*) FROM fetches").fetchone()[0]
+            store.clear(conn)
+            empty = (
+                conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM fetches").fetchone()[0],
+            )
+            conn.close()
+        self.assertEqual(cleared, {"observations": 1, "fetches": 1})
+        self.assertEqual((observations, fetches), (1, 1))
+        self.assertEqual(empty, (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -75,6 +75,7 @@ def run_adapter(
     fetch=None,
     dump_dir=None,
 ) -> tuple[str, object]:
+    store.delete_observations(conn, ip, adapter["id"])
     if "precheck" in adapter:
         reason = adapter["precheck"]()
         if reason:
@@ -158,6 +159,7 @@ def run_all(conn, ip: str, fetch=None, dump_dir=None, verbose: bool = False) -> 
                 )
 
     for adapter in remaining:
+        store.delete_observations(conn, ip, adapter["id"])
         if adapter.get("contextual"):
             status = f"skipped (contextual: needs {', '.join(adapter['needs'])})"
         else:
@@ -252,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--topics", help="comma-separated topic or topic.key filter")
     parser.add_argument("--dump", nargs="?", const="dumps", metavar="DIR", help="write raw per-source output under DIR/<timestamp>/<ip>/")
     parser.add_argument("--update-dbs", action="store_true", help="refresh the local MaxMind/DB-IP databases")
+    parser.add_argument("--clear", action="store_true", help="empty the whole database and exit")
+    parser.add_argument("--clear-ip", metavar="IP", help="empty just this IP (comma-separated allowed) and exit")
     parser.add_argument("--with-observations", action="store_true", help="embed raw observations in export")
     parser.add_argument("--show-fetch", type=int, metavar="ID", help="print a stored fetch body")
     parser.add_argument("-v", "--verbose", action="store_true", help="show per-source progress on stderr")
@@ -261,8 +265,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.update_dbs:
         return _update_dbs()
 
+    if args.clear and (args.ip or args.ips):
+        parser.error("--clear empties the whole database; use --clear-ip <ip> for a single IP")
+
     color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
     conn = store.open_store(args.db)
+
+    if args.clear:
+        totals = store.clear(conn)
+        conn.close()
+        print(f"cleared {totals['observations']} observations and {totals['fetches']} fetches (all)")
+        return 0
+
+    if args.clear_ip:
+        targets = [part.strip() for part in args.clear_ip.split(",") if part.strip()]
+        totals = {"observations": 0, "fetches": 0}
+        for target in targets:
+            counts = store.clear(conn, target)
+            totals["observations"] += counts["observations"]
+            totals["fetches"] += counts["fetches"]
+        conn.close()
+        print(
+            f"cleared {totals['observations']} observations and {totals['fetches']} fetches "
+            f"({', '.join(targets)})"
+        )
+        return 0
 
     if args.show_fetch is not None:
         code = show_fetch(conn, args.show_fetch)

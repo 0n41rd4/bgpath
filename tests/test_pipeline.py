@@ -151,6 +151,22 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("fetching", output)
         self.assertIn("ripestat.network-info", output)
 
+    def test_rerun_replaces_observations(self):
+        with mock.patch.dict(os.environ, {**NO_MMDB, "IPINFO_TOKEN": "", "SHODAN_API_KEY": ""}):
+            with tempfile.TemporaryDirectory() as tmp:
+                conn = store.open_store(str(Path(tmp) / "t.db"))
+                aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
+                first = conn.execute(
+                    "SELECT COUNT(*) FROM observations WHERE ip = '8.8.8.8'"
+                ).fetchone()[0]
+                aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
+                second = conn.execute(
+                    "SELECT COUNT(*) FROM observations WHERE ip = '8.8.8.8'"
+                ).fetchone()[0]
+                conn.close()
+        self.assertGreater(first, 0)
+        self.assertEqual(first, second)
+
     def test_warnings_include_missing_credentials(self):
         with mock.patch.dict(os.environ, {"IPINFO_TOKEN": "", "SHODAN_API_KEY": "", "MAXMIND_LICENSE_KEY": ""}):
             items = sources.warnings()
@@ -163,6 +179,20 @@ class PipelineTest(unittest.TestCase):
         ) as update:
             self.assertEqual(aranya.main(["--update-dbs"]), 0)
             update.assert_called_once()
+
+    def test_clear_ip_dispatches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "t.db")
+            conn = store.open_store(path)
+            store.save_observation(conn, "1.1.1.1", "src", "up", "reported", "t", "k", 1)
+            store.save_observation(conn, "2.2.2.2", "src", "up", "reported", "t", "k", 2)
+            conn.close()
+            with mock.patch.object(sources, "load_env"):
+                self.assertEqual(aranya.main(["--db", path, "--clear-ip", "1.1.1.1"]), 0)
+            conn = store.open_store(path)
+            ips = {row[0] for row in conn.execute("SELECT DISTINCT ip FROM observations")}
+            conn.close()
+        self.assertEqual(ips, {"2.2.2.2"})
 
     def test_load_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
