@@ -148,6 +148,16 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("fetching", output)
         self.assertIn("ripestat.network-info", output)
 
+    def test_dump_last_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "dumps"
+            aranya._link_last(str(root), "20260101T000000Z")
+            link = root / "last"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(os.readlink(link), "20260101T000000Z")
+            aranya._link_last(str(root), "20260102T000000Z")
+            self.assertEqual(os.readlink(link), "20260102T000000Z")
+
     def test_dump_source_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn = store.open_store(str(Path(tmp) / "t.db"))

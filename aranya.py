@@ -36,6 +36,16 @@ def _dump_source(directory, source, url, status, body, error, parsed) -> None:
         json.dump(meta, handle, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
 
+def _link_last(root: str, name: str) -> None:
+    os.makedirs(root, exist_ok=True)
+    link = os.path.join(root, "last")
+    if os.path.lexists(link):
+        if os.path.isdir(link) and not os.path.islink(link):
+            raise RuntimeError(f"{link} is a directory, refusing to replace it")
+        os.unlink(link)
+    os.symlink(name, link)
+
+
 def run_adapter(
     conn,
     adapter: dict,
@@ -276,11 +286,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("an IP is required (or use --report/--export/--html)")
 
     targets = [part.strip() for part in (args.ips or args.ip).split(",") if part.strip()]
-    test_dir = (
-        os.path.join(args.dump, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
-        if args.dump
-        else None
-    )
+    test_dir = None
+    if args.dump:
+        name = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        test_dir = os.path.join(args.dump, name)
+        os.makedirs(test_dir, exist_ok=True)
+        _link_last(args.dump, name)
     for target in targets:
         dump_dir = os.path.join(test_dir, target) if test_dir else None
         statuses, _ = run_all(conn, target, dump_dir=dump_dir, verbose=args.verbose)
