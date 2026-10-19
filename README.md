@@ -23,12 +23,17 @@ aranya --ips 8.8.8.8,1.1.1.1 --dump            # one timestamp folder, one subfo
 aranya --update-dbs                            # refresh the MaxMind/DB-IP .mmdb files
 aranya --clear                                 # empty the whole database and exit
 aranya --clear-ip 8.8.8.8                      # empty just that IP and exit
-python3 -m unittest discover -s tests          # 125 tests, fully offline
+python3 -m unittest discover -s tests          # 126 tests, fully offline
 ```
 
 Re-running an IP replaces that source's observations, so views do not accumulate
 duplicates; `fetches` are kept as raw history. `--clear` and `--clear-ip` remove
 both.
+
+The database defaults to `~/.local/share/aranya/aranya.db`
+(`$XDG_DATA_HOME/aranya/aranya.db`), independent of the working directory.
+Override with `--db` or `ARANYA_DB`. An older `./aranya.db` is not picked up
+automatically; pass `--db ./aranya.db` or move it into place.
 
 `python3 aranya.py ...` still works from the checkout.
 

@@ -21,7 +21,9 @@ import render
 from registry import observe, sources, store
 import views
 
-DEFAULT_DB = "aranya.db"
+def _default_db() -> str:
+    root = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(root, "aranya", "aranya.db")
 
 
 def _dump_source(directory, source, url, status, body, error, parsed) -> None:
@@ -242,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     sources.load_env()
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", nargs="?", help="IP address to look up")
-    parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
+    parser.add_argument("--db", default=os.environ.get("ARANYA_DB") or _default_db(), help="SQLite file (default: %(default)s)")
     parser.add_argument("--view", action="store_true", help="render the claim view for IP (no fetch)")
     parser.add_argument("--normalize", action="store_true", help="compare canonical values (with --view/--report/--stats)")
     parser.add_argument("--entities", action="store_true", help="resolve the IP's ownership entity")
@@ -269,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--clear empties the whole database; use --clear-ip <ip> for a single IP")
 
     color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
+    os.makedirs(os.path.dirname(os.path.abspath(args.db)), exist_ok=True)
     conn = store.open_store(args.db)
 
     if args.clear:

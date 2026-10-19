@@ -180,6 +180,10 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(aranya.main(["--update-dbs"]), 0)
             update.assert_called_once()
 
+    def test_default_db_uses_xdg(self):
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/tmp/xdg"}):
+            self.assertEqual(aranya._default_db(), "/tmp/xdg/aranya/aranya.db")
+
     def test_clear_ip_dispatches(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "t.db")
