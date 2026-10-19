@@ -7,3 +7,4 @@ venv/
 *.mmdb.gz
 .geoip.env
 scripts/.geoip.env
+dumps/

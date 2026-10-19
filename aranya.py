@@ -23,18 +23,34 @@ import views
 DEFAULT_DB = "aranya.db"
 
 
+def _dump_source(directory, source, url, status, body, error, parsed) -> None:
+    if not directory:
+        return
+    source_dir = os.path.join(directory, source)
+    os.makedirs(source_dir, exist_ok=True)
+    if body is not None:
+        with open(os.path.join(source_dir, "output.txt"), "w", encoding="utf-8") as handle:
+            handle.write(body)
+    meta = {"source": source, "url": url, "status": status, "error": error, "parsed": parsed}
+    with open(os.path.join(source_dir, "output.json"), "w", encoding="utf-8") as handle:
+        json.dump(meta, handle, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+
+
 def run_adapter(
     conn,
     adapter: dict,
     ip: str,
     context: dict,
     fetch=None,
+    dump_dir=None,
 ) -> tuple[str, object]:
     if "precheck" in adapter:
         reason = adapter["precheck"]()
         if reason:
-            store.save_fetch(conn, adapter["id"], adapter["id"], None, None, f"skipped ({reason})", ip)
-            return f"skipped ({reason})", None
+            status = f"skipped ({reason})"
+            store.save_fetch(conn, adapter["id"], adapter["id"], None, None, status, ip)
+            _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None)
+            return status, None
 
     url = adapter["url"](context)
     if adapter.get("delay") and fetch is None:
@@ -48,11 +64,13 @@ def run_adapter(
     fetch_id = store.save_fetch(conn, adapter["id"], sources.redact_url(url), status, body, error, ip)
 
     if error:
+        _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, error, None)
         return f"error ({error})", None
 
     try:
         parsed, observations = observe.observe(adapter, ip, body)
     except ValueError as exc:
+        _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, f"parse error ({exc})", None)
         return f"parse error ({exc})", None
 
     for key, value in adapter["provides"](parsed).items():
@@ -74,14 +92,19 @@ def run_adapter(
             fetch_id,
         )
 
+    _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, None, parsed)
     return "ok", parsed
 
 
-def run_all(conn, ip: str, fetch=None) -> dict:
+def run_all(conn, ip: str, fetch=None, dump_dir=None, verbose: bool = False) -> dict:
     context: dict = {"ip": ip}
     remaining = list(sources.SOURCES)
     statuses: dict[str, str] = {}
     parsed_results: dict[str, object] = {}
+    total = len(remaining)
+    done = 0
+    if verbose:
+        print(f"fetching {total} sources for {ip}", file=sys.stderr, flush=True)
 
     progressed = True
     while remaining and progressed:
@@ -91,14 +114,33 @@ def run_all(conn, ip: str, fetch=None) -> dict:
                 continue
             remaining.remove(adapter)
             progressed = True
-            status, parsed = run_adapter(conn, adapter, ip, context, fetch)
+            started = time.perf_counter()
+            status, parsed = run_adapter(conn, adapter, ip, context, fetch, dump_dir)
             statuses[adapter["id"]] = status
             parsed_results[adapter["id"]] = parsed
+            done += 1
+            if verbose:
+                print(
+                    f"[{done:>2}/{total}] {adapter['id']:<26} {status:<30} {time.perf_counter() - started:5.1f}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     for adapter in remaining:
         status = f"skipped (missing {', '.join(adapter['needs'])})"
         statuses[adapter["id"]] = status
         store.save_fetch(conn, adapter["id"], adapter["id"], None, None, status, ip)
+        _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None)
+        done += 1
+        if verbose:
+            print(f"[{done:>2}/{total}] {adapter['id']:<26} {status}", file=sys.stderr, flush=True)
+
+    if dump_dir:
+        os.makedirs(dump_dir, exist_ok=True)
+        with open(os.path.join(dump_dir, "_status.txt"), "w", encoding="utf-8") as handle:
+            handle.write("source\tstatus\tfolder\n")
+            for source_id, status in statuses.items():
+                handle.write(f"{source_id}\t{status}\t{source_id}/\n")
 
     return statuses, parsed_results
 
@@ -171,10 +213,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stats", action="store_true", help="cross-IP analysis over the store")
     parser.add_argument("--export", metavar="FILE", help="write the JSON contract (no fetch)")
     parser.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
-    parser.add_argument("--ips", help="comma-separated IP filter for --export/--html")
+    parser.add_argument("--ips", help="comma-separated IP filter for --export/--html, or IPs to fetch")
     parser.add_argument("--topics", help="comma-separated topic or topic.key filter")
+    parser.add_argument("--dump", nargs="?", const="dumps", metavar="DIR", help="write raw per-source output under DIR/<timestamp>/<ip>/")
     parser.add_argument("--with-observations", action="store_true", help="embed raw observations in export")
     parser.add_argument("--show-fetch", type=int, metavar="ID", help="print a stored fetch body")
+    parser.add_argument("-v", "--verbose", action="store_true", help="show per-source progress on stderr")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     args = parser.parse_args(argv)
 
@@ -228,18 +272,26 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
         return 0
 
-    if not args.ip:
+    if not args.ip and not args.ips:
         parser.error("an IP is required (or use --report/--export/--html)")
 
-    statuses, _ = run_all(conn, args.ip)
+    targets = [part.strip() for part in (args.ips or args.ip).split(",") if part.strip()]
+    test_dir = (
+        os.path.join(args.dump, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
+        if args.dump
+        else None
+    )
+    for target in targets:
+        dump_dir = os.path.join(test_dir, target) if test_dir else None
+        statuses, _ = run_all(conn, target, dump_dir=dump_dir, verbose=args.verbose)
 
-    print(f"aranya {args.ip}\n")
-    print("sources:")
-    for adapter in sources.SOURCES:
-        print(f"  {statuses[adapter['id']]:<12} {adapter['id']}")
+        print(f"aranya {target}\n")
+        print("sources:")
+        for adapter in sources.SOURCES:
+            print(f"  {statuses[adapter['id']]:<12} {adapter['id']}")
 
-    print_summary(conn, args.ip)
-    print_comparison(conn, args.ip)
+        print_summary(conn, target)
+        print_comparison(conn, target)
     conn.close()
     return 0
 

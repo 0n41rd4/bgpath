@@ -16,7 +16,10 @@ in the `observations` table.
 
 ```sh
 python3 aranya.py 8.8.8.8 [--db FILE]          # fetch all sources, print observations
-python3 -m unittest discover -s tests          # 102 tests, fully offline
+python3 aranya.py 8.8.8.8 --dump               # per-source raw output in dumps/<timestamp>/<ip>/<source>/
+python3 aranya.py 8.8.8.8 -v                   # per-source progress on stderr
+python3 aranya.py --ips 8.8.8.8,1.1.1.1 --dump # one timestamp folder, one subfolder per IP
+python3 -m unittest discover -s tests          # 116 tests, fully offline
 ```
 
 ## Views

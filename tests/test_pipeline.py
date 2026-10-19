@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import os
 import sys
 import tempfile
@@ -134,6 +137,31 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(asns)
         self.assertGreater(locations[0], 0)
         self.assertEqual(untraced[0], 0)
+
+    def test_verbose_progress(self):
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(stream):
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            aranya.run_all(conn, "8.8.8.8", fetch=make_fetch(), verbose=True)
+            conn.close()
+        output = stream.getvalue()
+        self.assertIn("fetching", output)
+        self.assertIn("ripestat.network-info", output)
+
+    def test_dump_source_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            dump = Path(tmp) / "dump" / "8.8.8.8"
+            aranya.run_all(conn, "8.8.8.8", fetch=make_fetch(), dump_dir=str(dump))
+            conn.close()
+            self.assertTrue((dump / "ripestat.network-info" / "output.txt").exists())
+            meta = json.loads((dump / "ripestat.network-info" / "output.json").read_text())
+            self.assertEqual(meta["status"], 200)
+            self.assertIn("asns", meta["parsed"])
+            status = (dump / "_status.txt").read_text()
+            self.assertIn("source\tstatus\tfolder", status)
+            self.assertIn("ripestat.network-info\t", status)
+            self.assertIn("ripestat.network-info/", status)
 
     def test_missing_dependencies_skip(self):
         def failing_fetch(url):
