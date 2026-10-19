@@ -18,6 +18,7 @@ import paths.graph as graphlib
 import paths.ingest as ingest
 import paths.probe as probe
 import paths.store as store
+import registry.sources as sources
 
 DEFAULT_DB = "paths.db"
 
@@ -252,6 +253,7 @@ def cmd_html(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    sources.load_env()
     parser = argparse.ArgumentParser(prog="paths", description="path & topology exploration")
     parser.add_argument("--db", default=DEFAULT_DB)
     sub = parser.add_subparsers(dest="command", required=True)

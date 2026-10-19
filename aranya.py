@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -44,6 +45,26 @@ def _link_last(root: str, name: str) -> None:
             raise RuntimeError(f"{link} is a directory, refusing to replace it")
         os.unlink(link)
     os.symlink(name, link)
+
+
+def _update_dbs() -> int:
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "update_geoip.sh")
+    if not os.path.isfile(script):
+        print(f"update script not found: {script}")
+        return 1
+    return subprocess.run([script], check=False).returncode
+
+
+def _print_warnings(test_dir=None) -> None:
+    items = sources.warnings()
+    if not items:
+        return
+    print("warnings:", file=sys.stderr)
+    for item in items:
+        print(f"  ! {item}", file=sys.stderr)
+    if test_dir:
+        with open(os.path.join(test_dir, "_warnings.txt"), "w", encoding="utf-8") as handle:
+            handle.write("\n".join(items) + "\n")
 
 
 def run_adapter(
@@ -137,7 +158,10 @@ def run_all(conn, ip: str, fetch=None, dump_dir=None, verbose: bool = False) -> 
                 )
 
     for adapter in remaining:
-        status = f"skipped (missing {', '.join(adapter['needs'])})"
+        if adapter.get("contextual"):
+            status = f"skipped (contextual: needs {', '.join(adapter['needs'])})"
+        else:
+            status = f"skipped (missing {', '.join(adapter['needs'])})"
         statuses[adapter["id"]] = status
         store.save_fetch(conn, adapter["id"], adapter["id"], None, None, status, ip)
         _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None)
@@ -213,6 +237,7 @@ def show_fetch(conn, fetch_id: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    sources.load_env()
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", nargs="?", help="IP address to look up")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite file (default: %(default)s)")
@@ -226,11 +251,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ips", help="comma-separated IP filter for --export/--html, or IPs to fetch")
     parser.add_argument("--topics", help="comma-separated topic or topic.key filter")
     parser.add_argument("--dump", nargs="?", const="dumps", metavar="DIR", help="write raw per-source output under DIR/<timestamp>/<ip>/")
+    parser.add_argument("--update-dbs", action="store_true", help="refresh the local MaxMind/DB-IP databases")
     parser.add_argument("--with-observations", action="store_true", help="embed raw observations in export")
     parser.add_argument("--show-fetch", type=int, metavar="ID", help="print a stored fetch body")
     parser.add_argument("-v", "--verbose", action="store_true", help="show per-source progress on stderr")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     args = parser.parse_args(argv)
+
+    if args.update_dbs:
+        return _update_dbs()
 
     color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
     conn = store.open_store(args.db)
@@ -292,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         test_dir = os.path.join(args.dump, name)
         os.makedirs(test_dir, exist_ok=True)
         _link_last(args.dump, name)
+    _print_warnings(test_dir)
     for target in targets:
         dump_dir = os.path.join(test_dir, target) if test_dir else None
         statuses, _ = run_all(conn, target, dump_dir=dump_dir, verbose=args.verbose)

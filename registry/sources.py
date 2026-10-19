@@ -151,16 +151,74 @@ def _reverse(ip: str) -> str:
     return ".".join(reversed(ip.split(".")))
 
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def load_env(path: str | None = None) -> None:
+    """Load KEY=value lines from a gitignored env file without overriding the shell."""
+    path = path or os.environ.get("ARANYA_ENV") or os.path.join(_ROOT, "scripts", ".aranya.env")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                key, sep, value = line.partition("=")
+                if not sep:
+                    continue
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass
+
+
 def _env(name: str) -> str | None:
     return os.environ.get(name) or None
 
 
-def _mmdb_precheck(env_name: str) -> str | None:
-    path = _env(env_name)
-    if not path:
-        return f"{env_name} not set"
+def _data_dir() -> str:
+    return os.environ.get("ARANYA_DATA") or os.path.join(_ROOT, "data")
+
+
+def _db_path(env_name: str, filename: str) -> str:
+    return _env(env_name) or os.path.join(_data_dir(), filename)
+
+
+DB_FRESHNESS = (
+    ("MAXMIND_DB", "GeoLite2-City.mmdb", "MaxMind City", 10),
+    ("MAXMIND_ASN_DB", "GeoLite2-ASN.mmdb", "MaxMind ASN", 10),
+    ("DBIP_DB", "dbip-city-lite.mmdb", "DB-IP City", 40),
+)
+
+
+def warnings() -> list[str]:
+    items: list[str] = []
+    if not _env("IPINFO_TOKEN"):
+        items.append("IPINFO_TOKEN not set (ipinfo skipped)")
+    if not _env("SHODAN_API_KEY"):
+        items.append("SHODAN_API_KEY not set (shodan.host skipped; internetdb still runs)")
+    if not _env("MAXMIND_LICENSE_KEY"):
+        items.append("MAXMIND_LICENSE_KEY not set (MaxMind databases cannot be refreshed)")
+    try:
+        import maxminddb  # noqa: F401
+    except ImportError:
+        items.append("maxminddb not installed (MaxMind/DB-IP sources skipped)")
+    for env_name, filename, label, max_age in DB_FRESHNESS:
+        path = _db_path(env_name, filename)
+        if not os.path.isfile(path):
+            items.append(f"{label} database missing: {path} (run: aranya --update-dbs)")
+            continue
+        age = (time.time() - os.path.getmtime(path)) / 86400
+        if age > max_age:
+            items.append(f"{label} database is {age:.0f} days old: {path} (run: aranya --update-dbs)")
+    return items
+
+
+def _mmdb_precheck(env_name: str, filename: str) -> str | None:
+    path = _db_path(env_name, filename)
     if not os.path.isfile(path):
-        return f"{env_name} file not found"
+        return f"{path} not found"
     try:
         import maxminddb  # noqa: F401
     except ImportError:
@@ -168,11 +226,11 @@ def _mmdb_precheck(env_name: str) -> str | None:
     return None
 
 
-def _make_mmdb_fetch(env_name: str):
+def _make_mmdb_fetch(env_name: str, filename: str):
     def fetch(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:
         try:
             import maxminddb
-            with maxminddb.open_database(_env(env_name)) as reader:
+            with maxminddb.open_database(_db_path(env_name, filename)) as reader:
                 record = reader.get(ip)
         except Exception as exc:
             return None, None, str(exc)
@@ -666,6 +724,7 @@ SOURCES: list[dict] = [
         "upstream": "PeeringDB",
         "evidence_class": "reported",
         "needs": ["fac_id"],
+        "contextual": True,
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/fac?id={ctx['fac_id']}",
         "parse": parsers.peeringdb_fac,
@@ -677,6 +736,7 @@ SOURCES: list[dict] = [
         "upstream": "PeeringDB",
         "evidence_class": "reported",
         "needs": ["ixlan_id"],
+        "contextual": True,
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/ixpfx?ixlan_id={ctx['ixlan_id']}",
         "parse": parsers.peeringdb_ixpfx,
@@ -720,9 +780,9 @@ SOURCES: list[dict] = [
         "upstream": "MaxMind",
         "evidence_class": "reported",
         "needs": [],
-        "precheck": lambda: _mmdb_precheck("MAXMIND_DB"),
-        "url": lambda ctx: f"MAXMIND_DB {ctx['ip']}",
-        "fetch": _make_mmdb_fetch("MAXMIND_DB"),
+        "precheck": lambda: _mmdb_precheck("MAXMIND_DB", "GeoLite2-City.mmdb"),
+        "url": lambda ctx: f"{_db_path('MAXMIND_DB', 'GeoLite2-City.mmdb')} {ctx['ip']}",
+        "fetch": _make_mmdb_fetch("MAXMIND_DB", "GeoLite2-City.mmdb"),
         "parse": parsers.mmdb,
         "observations": _mmdb_obs,
         "provides": lambda parsed: {},
@@ -732,9 +792,9 @@ SOURCES: list[dict] = [
         "upstream": "DB-IP",
         "evidence_class": "reported",
         "needs": [],
-        "precheck": lambda: _mmdb_precheck("DBIP_DB"),
-        "url": lambda ctx: f"DBIP_DB {ctx['ip']}",
-        "fetch": _make_mmdb_fetch("DBIP_DB"),
+        "precheck": lambda: _mmdb_precheck("DBIP_DB", "dbip-city-lite.mmdb"),
+        "url": lambda ctx: f"{_db_path('DBIP_DB', 'dbip-city-lite.mmdb')} {ctx['ip']}",
+        "fetch": _make_mmdb_fetch("DBIP_DB", "dbip-city-lite.mmdb"),
         "parse": parsers.mmdb,
         "observations": _mmdb_obs,
         "provides": lambda parsed: {},
@@ -744,9 +804,9 @@ SOURCES: list[dict] = [
         "upstream": "MaxMind",
         "evidence_class": "reported",
         "needs": [],
-        "precheck": lambda: _mmdb_precheck("MAXMIND_ASN_DB"),
-        "url": lambda ctx: f"MAXMIND_ASN_DB {ctx['ip']}",
-        "fetch": _make_mmdb_fetch("MAXMIND_ASN_DB"),
+        "precheck": lambda: _mmdb_precheck("MAXMIND_ASN_DB", "GeoLite2-ASN.mmdb"),
+        "url": lambda ctx: f"{_db_path('MAXMIND_ASN_DB', 'GeoLite2-ASN.mmdb')} {ctx['ip']}",
+        "fetch": _make_mmdb_fetch("MAXMIND_ASN_DB", "GeoLite2-ASN.mmdb"),
         "parse": parsers.mmdb_asn,
         "observations": _mmdb_asn_obs,
         "provides": lambda parsed: {},

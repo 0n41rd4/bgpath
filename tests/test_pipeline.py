@@ -20,6 +20,7 @@ OPTIONAL = {
     "ipinfo", "shodan.host", "maxmind.geolite2", "maxmind.asn", "dbip.lite",
     "peeringdb.fac", "peeringdb.ixpfx",
 }
+NO_MMDB = {"MAXMIND_DB": "/nonexistent", "MAXMIND_ASN_DB": "/nonexistent", "DBIP_DB": "/nonexistent"}
 
 
 def make_fetch():
@@ -75,16 +76,18 @@ def make_fetch():
 
 class PipelineTest(unittest.TestCase):
     def test_full_pipeline_offline(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            conn = store.open_store(str(Path(tmp) / "t.db"))
-            statuses, parsed = aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
-            conn.close()
+        with mock.patch.dict(os.environ, {**NO_MMDB, "IPINFO_TOKEN": "", "SHODAN_API_KEY": ""}):
+            with tempfile.TemporaryDirectory() as tmp:
+                conn = store.open_store(str(Path(tmp) / "t.db"))
+                statuses, parsed = aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
+                conn.close()
 
         for source_id, status in statuses.items():
             if source_id in OPTIONAL:
                 self.assertTrue(status.startswith("skipped"), f"{source_id}: {status}")
             else:
                 self.assertEqual(status, "ok", f"{source_id}: {status}")
+        self.assertIn("contextual", statuses["peeringdb.fac"])
 
         self.assertEqual(parsed["ripestat.network-info"]["asns"], ["15169"])
         self.assertEqual(parsed["peeringdb.net"]["net_id"], 433)
@@ -94,7 +97,7 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(parsed["irr.origin"]["objects"][0]["origin"], "AS15169")
 
     def test_optional_sources_configured(self):
-        env = {"IPINFO_TOKEN": "test-token", "SHODAN_API_KEY": "test-key"}
+        env = {"IPINFO_TOKEN": "test-token", "SHODAN_API_KEY": "test-key", **NO_MMDB}
         with mock.patch.dict(os.environ, env):
             with tempfile.TemporaryDirectory() as tmp:
                 conn = store.open_store(str(Path(tmp) / "t.db"))
@@ -147,6 +150,35 @@ class PipelineTest(unittest.TestCase):
         output = stream.getvalue()
         self.assertIn("fetching", output)
         self.assertIn("ripestat.network-info", output)
+
+    def test_warnings_include_missing_credentials(self):
+        with mock.patch.dict(os.environ, {"IPINFO_TOKEN": "", "SHODAN_API_KEY": "", "MAXMIND_LICENSE_KEY": ""}):
+            items = sources.warnings()
+        self.assertTrue(any("IPINFO_TOKEN" in item for item in items))
+        self.assertTrue(any("SHODAN_API_KEY" in item for item in items))
+
+    def test_update_dbs_dispatches(self):
+        with mock.patch.object(sources, "load_env"), mock.patch.object(
+            aranya, "_update_dbs", return_value=0
+        ) as update:
+            self.assertEqual(aranya.main(["--update-dbs"]), 0)
+            update.assert_called_once()
+
+    def test_load_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "env"
+            path.write_text("export ARANYA_TEST_A=bar\nARANYA_TEST_B='qux'\n")
+            with mock.patch.dict(os.environ, {"ARANYA_TEST_A": "keep"}, clear=False):
+                sources.load_env(str(path))
+                self.assertEqual(os.environ["ARANYA_TEST_A"], "keep")
+                self.assertEqual(os.environ["ARANYA_TEST_B"], "qux")
+
+    def test_mmdb_default_path(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DBIP_DB", None)
+            os.environ.pop("ARANYA_DATA", None)
+            path = sources._db_path("DBIP_DB", "dbip-city-lite.mmdb")
+            self.assertTrue(path.endswith(os.path.join("data", "dbip-city-lite.mmdb")))
 
     def test_dump_last_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:

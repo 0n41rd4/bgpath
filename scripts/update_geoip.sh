@@ -4,14 +4,17 @@
 #
 # DB-IP Lite (City): free, monthly, no account.
 # MaxMind GeoLite2 (City + ASN): free, weekly, needs MAXMIND_LICENSE_KEY (from a
-#   free account). Read from the environment or a gitignored scripts/.geoip.env.
+#   free account). Read from the environment or a gitignored scripts/.aranya.env.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${ARANYA_DATA:-$SCRIPT_DIR/../data}"
 mkdir -p "$DATA_DIR"
 
-if [[ -f "$SCRIPT_DIR/.geoip.env" ]]; then
+if [[ -f "$SCRIPT_DIR/.aranya.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/.aranya.env"
+elif [[ -f "$SCRIPT_DIR/.geoip.env" ]]; then
   # shellcheck disable=SC1091
   source "$SCRIPT_DIR/.geoip.env"
 fi
