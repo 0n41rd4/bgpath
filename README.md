@@ -20,7 +20,8 @@ aranya 8.8.8.8 [--db FILE]                     # fetch all sources, print observ
 aranya 8.8.8.8 --dump                          # per-source raw output; dumps/last -> latest timestamp
 aranya 8.8.8.8 -v                              # per-source progress on stderr
 aranya --ips 8.8.8.8,1.1.1.1 --dump            # one timestamp folder, one subfolder per IP
-python3 -m unittest discover -s tests          # 117 tests, fully offline
+aranya --update-dbs                            # refresh the MaxMind/DB-IP .mmdb files
+python3 -m unittest discover -s tests          # 122 tests, fully offline
 ```
 
 `python3 aranya.py ...` still works from the checkout.
@@ -177,15 +178,21 @@ re-front of data we already collect):
 ## Optional sources
 
 These sources need credentials or a local database file; without them they are
-reported as `skipped (...)`:
+reported as `skipped (...)`. Credentials come from the shell or from the
+gitignored `scripts/.aranya.env` (copy `scripts/.aranya.env.example`); the shell
+wins. The `.mmdb` paths default to `data/` and can be overridden.
 
 | Source | Env var | Setup |
 |---|---|---|
-| IPinfo | `IPINFO_TOKEN` | free token at ipinfo.io |
+| IPinfo | `IPINFO_TOKEN` | free token at ipinfo.io; can live in `scripts/.aranya.env` |
 | Shodan host API | `SHODAN_API_KEY` | account at shodan.io; **the host API consumes query credits (paid)** — keyless `internetdb` already covers the free slice |
-| MaxMind GeoLite2 City | `MAXMIND_DB` | path to GeoLite2-City `.mmdb` (free account at maxmind.com) + `pip install maxminddb` |
-| MaxMind GeoLite2 ASN | `MAXMIND_ASN_DB` | path to GeoLite2-ASN `.mmdb` (same account) |
-| DB-IP Lite | `DBIP_DB` | path to DB-IP Lite City `.mmdb` (free download at db-ip.com) |
+| MaxMind GeoLite2 City | `MAXMIND_DB` | defaults to `data/GeoLite2-City.mmdb` (free account at maxmind.com) + `pip install maxminddb` |
+| MaxMind GeoLite2 ASN | `MAXMIND_ASN_DB` | defaults to `data/GeoLite2-ASN.mmdb` (same account) |
+| DB-IP Lite | `DBIP_DB` | defaults to `data/dbip-city-lite.mmdb` (free download at db-ip.com) |
+
+`aranya --update-dbs` (or `./scripts/update_geoip.sh`) refreshes all three
+databases. Both read the MaxMind key from `scripts/.aranya.env`; DB-IP needs no
+key.
 
 Tokens/keys are redacted in the stored `fetches.url`.
 
@@ -195,14 +202,14 @@ The `.mmdb` files go stale: **MaxMind GeoLite2 updates ~weekly**, **DB-IP Lite
 ~monthly**. Refresh them with:
 
 ```sh
-./scripts/update_geoip.sh   # writes data/dbip-city-lite.mmdb, data/GeoLite2-City.mmdb, data/GeoLite2-ASN.mmdb
+aranya --update-dbs         # or ./scripts/update_geoip.sh
 ```
 
 The MaxMind license key is read from the environment or from the gitignored
-`scripts/.geoip.env`:
+`scripts/.aranya.env`:
 
 ```sh
-echo 'export MAXMIND_LICENSE_KEY=your-key' > scripts/.geoip.env
+echo 'MAXMIND_LICENSE_KEY=your-key' >> scripts/.aranya.env
 ```
 
 Schedule it (cron, weekly):
@@ -218,7 +225,7 @@ or with a systemd timer:
 [Service]
 Type=oneshot
 WorkingDirectory=/path/to/aranya
-EnvironmentFile=/path/to/aranya/scripts/.geoip.env
+EnvironmentFile=/path/to/aranya/scripts/.aranya.env
 ExecStart=/path/to/aranya/scripts/update_geoip.sh
 ```
 
