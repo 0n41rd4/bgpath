@@ -24,7 +24,6 @@ import bgp
 import query
 
 import paths.alias as alias
-import paths.analysis as analysis
 import paths.store as store
 
 

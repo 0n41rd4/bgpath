@@ -132,7 +132,5 @@ def summary(graph: nx.DiGraph) -> dict:
         "nodes": graph.number_of_nodes(),
         "edges": graph.number_of_edges(),
         "ecmp_nodes": ecmp_nodes(graph),
-        "sources": sorted(node for node, degree in graph.in_degree() if degree == 0),
-        "sinks": sorted(node for node, degree in graph.out_degree() if degree == 0),
         "gap_edges": sum(1 for _, _, data in graph.edges(data=True) if data.get("gap")),
     }

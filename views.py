@@ -13,17 +13,6 @@ def ips(conn) -> list[str]:
     return [row[0] for row in conn.execute("SELECT DISTINCT ip FROM observations ORDER BY ip")]
 
 
-def sources(conn, ips: list[str] | None = None) -> list[str]:
-    if ips:
-        marks = ",".join("?" * len(ips))
-        rows = conn.execute(
-            f"SELECT DISTINCT source FROM observations WHERE ip IN ({marks}) ORDER BY source", ips
-        )
-    else:
-        rows = conn.execute("SELECT DISTINCT source FROM observations ORDER BY source")
-    return [row[0] for row in rows]
-
-
 def keys(conn, ips: list[str] | None = None) -> list[tuple[str, str]]:
     if ips:
         marks = ",".join("?" * len(ips))

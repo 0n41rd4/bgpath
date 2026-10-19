@@ -139,8 +139,8 @@ def print_comparison(conn, ip: str) -> None:
     for row in compare.summarize(conn, ip):
         mark = marks[row["verdict"]]
         print(f"  [{mark}] {row['topic']}.{row['key']}  ({row['verdict']})")
-        for value, sources in row["values"].items():
-            print(f"       {_fmt(json.loads(value))}  <-  {', '.join(sources)}")
+        for value, backers in row["values"].items():
+            print(f"       {_fmt(json.loads(value))}  <-  {', '.join(backers)}")
 
 
 def show_fetch(conn, fetch_id: int) -> int:

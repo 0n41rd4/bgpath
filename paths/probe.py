@@ -25,7 +25,6 @@ SCAMPER = "scamper"
 VOYAGE = "voyage"
 TOOLS = {"scamper": SCAMPER, "dublin": DUBLIN, "voyage": VOYAGE}
 PARIS = {"udp": "udp-paris", "icmp": "icmp-paris", "tcp": "tcp-ack"}
-PROTOCOLS = tuple(PARIS)
 VOYAGE_PROTOCOLS = {0: "icmp", 1: "icmp6", 2: "tcp", 3: "udp"}
 
 _sudo_cache: list[str] | None = None
