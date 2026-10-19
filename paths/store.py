@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
-SCHEMA = """
+from registry.store import FETCHES_SCHEMA
+
+SCHEMA = FETCHES_SCHEMA + """
 CREATE TABLE IF NOT EXISTS runs (
     run_id     TEXT PRIMARY KEY,
     target     TEXT NOT NULL,

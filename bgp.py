@@ -16,7 +16,7 @@ from __future__ import annotations
 import ipaddress
 
 import cache
-from registry import parsers, sources
+from registry import parsers, sources, store
 
 ROUTEVIEWS = "https://api.routeviews.org"
 
@@ -27,6 +27,7 @@ def _get(url: str) -> str:
     if hit is not None:
         return hit
     status, body, error = sources.http_get(url)
+    store.record_fetch("bgp", sources.redact_url(url), status, body, error)
     if error:
         raise RuntimeError(error)
     cache.put(key, body)

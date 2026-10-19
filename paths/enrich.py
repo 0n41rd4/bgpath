@@ -22,6 +22,7 @@ from collections import defaultdict
 
 import bgp
 import query
+import registry.store as raw_store
 
 import paths.alias as alias
 import paths.store as store
@@ -355,6 +356,35 @@ def mark_aliasing(conn, run_id, graph) -> dict[str, list[str]]:
 
 
 def expand(
+    conn,
+    run_id,
+    graph,
+    budget: int = 20,
+    neighbours_cap: int = 40,
+    sessions: bool = True,
+    peeringdb: bool = True,
+    neighbours: bool = True,
+    aliases: bool = True,
+    geo: bool = True,
+    probes: bool = True,
+) -> dict:
+    with raw_store.capture(conn):
+        return _expand(
+            conn,
+            run_id,
+            graph,
+            budget=budget,
+            neighbours_cap=neighbours_cap,
+            sessions=sessions,
+            peeringdb=peeringdb,
+            neighbours=neighbours,
+            aliases=aliases,
+            geo=geo,
+            probes=probes,
+        )
+
+
+def _expand(
     conn,
     run_id,
     graph,

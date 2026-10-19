@@ -26,6 +26,8 @@ ATLAS_RESULTS_URL = "https://atlas.ripe.net/api/v2/measurements/{mid}/results/"
 
 
 def http_get(url: str, timeout: int = TIMEOUT, retries: int = 2) -> tuple[int | None, str | None, str | None]:
+    last_status: int | None = None
+    last_body: str | None = None
     last_error: str | None = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -34,21 +36,21 @@ def http_get(url: str, timeout: int = TIMEOUT, retries: int = 2) -> tuple[int | 
                 status = resp.status
                 body = resp.read().decode("utf-8", "replace")
                 if status == 429 or status >= 500:
-                    last_error = f"HTTP {status}"
+                    last_status, last_body, last_error = status, body, f"HTTP {status}"
                 else:
                     return status, body, None
         except urllib.error.HTTPError as exc:
             status = exc.code
             body = exc.read().decode("utf-8", "replace")
             if status == 429 or status >= 500:
-                last_error = f"HTTP {status}"
+                last_status, last_body, last_error = status, body, f"HTTP {status}"
             else:
                 return status, body, f"HTTP {status}"
         except Exception as exc:
             last_error = str(exc)
         if attempt < retries:
             time.sleep(attempt + 1)
-    return None, None, last_error
+    return last_status, last_body, last_error
 
 
 def _fetch_rdns(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:

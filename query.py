@@ -11,7 +11,7 @@ import json
 import time
 
 import cache
-from registry import observe, sources
+from registry import observe, sources, store
 
 
 def _adapter(adapter_id: str) -> dict:
@@ -34,6 +34,7 @@ def fetch_parsed(adapter_id: str, ip: str = "", context: dict | None = None, ref
         status, body, error = adapter["fetch"](ip, ctx)
     else:
         status, body, error = sources.http_get(url)
+    store.record_fetch(adapter_id, sources.redact_url(url), status, body, error, ip=ip or None)
     if error:
         raise RuntimeError(f"{adapter_id}: {error}")
     if adapter.get("delay"):

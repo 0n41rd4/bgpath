@@ -57,6 +57,16 @@ class StoreTest(unittest.TestCase):
             conn.close()
         self.assertEqual(row, ("Ashburn", "US", 39.04, -77.49))
 
+    def test_record_fetch_uses_capture_sink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            self.assertIsNone(store.record_fetch("src", "http://example", 200, "body", None))
+            with store.capture(conn):
+                fetch_id = store.record_fetch("src", "http://example", 200, "body", None, "8.8.8.8")
+            row = conn.execute("SELECT source, body, ip FROM fetches WHERE id = ?", (fetch_id,)).fetchone()
+            conn.close()
+        self.assertEqual(row, ("src", "body", "8.8.8.8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from datetime import datetime, timezone
+
+FETCHES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS fetches (
+    id INTEGER PRIMARY KEY,
+    ip TEXT,
+    source TEXT NOT NULL,
+    url TEXT NOT NULL,
+    status INTEGER,
+    body TEXT,
+    error TEXT,
+    fetched_at TEXT NOT NULL
+);
+"""
 
 
 def now() -> str:
@@ -13,20 +27,7 @@ def now() -> str:
 
 def open_store(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS fetches (
-            id INTEGER PRIMARY KEY,
-            ip TEXT,
-            source TEXT NOT NULL,
-            url TEXT NOT NULL,
-            status INTEGER,
-            body TEXT,
-            error TEXT,
-            fetched_at TEXT NOT NULL
-        )
-        """
-    )
+    conn.execute(FETCHES_SCHEMA)
     fetch_cols = {row[1] for row in conn.execute("PRAGMA table_info(fetches)")}
     if "ip" not in fetch_cols:
         conn.execute("ALTER TABLE fetches ADD COLUMN ip TEXT")
@@ -118,3 +119,32 @@ def save_observation(
         (ip, source, upstream, evidence_class, topic, key, json.dumps(value), fetch_id, now()),
     )
     conn.commit()
+
+
+_sink: sqlite3.Connection | None = None
+
+
+@contextlib.contextmanager
+def capture(conn: sqlite3.Connection):
+    """Route raw fetches performed by query/bgp into `conn`."""
+    global _sink
+    previous, _sink = _sink, conn
+    try:
+        yield conn
+    finally:
+        _sink = previous
+
+
+def record_fetch(
+    source: str,
+    url: str,
+    status: int | None,
+    body: str | None,
+    error: str | None,
+    ip: str | None = None,
+) -> int | None:
+    """Persist a raw response when a capture sink is active."""
+    if _sink is None:
+        return None
+    return save_fetch(_sink, source, url, status, body, error, ip)
+

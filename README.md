@@ -70,7 +70,9 @@ ripestat.geoloc              4      4        0      0
 
 Colour is auto-detected; disable with `--no-color` or `NO_COLOR`.
 
-Internals: `views.py` holds read-only projections over the existing tables,
+Internals: `registry/` holds the adapters (`sources.py`), decoders (`parsers.py`,
+`ripe.py`), the parse step (`observe.py`) and the raw/observation store
+(`store.py`). `views.py` holds read-only projections over the existing tables,
 `aggregate.py` turns those rows into labelled claims / consensus / profiles, and
 `render.py` draws them. Nothing here writes to the store.
 
