@@ -231,6 +231,14 @@ class PipelineTest(unittest.TestCase):
             aranya.run_all(conn, "8.8.8.8", fetch=make_fetch(), dump_dir=str(dump))
             conn.close()
             self.assertTrue((dump / "ripestat.network-info" / "output.txt").exists())
+            raw = json.loads((dump / "ripestat.network-info" / "raw_output.json").read_text())
+            self.assertIn("asns", raw["data"])
+            self.assertEqual(
+                json.loads((dump / "rdns.ptr" / "raw_output.json").read_text()),
+                {"raw": "dns.google"},
+            )
+            routeviews = json.loads((dump / "routeviews.prefix" / "raw_output.json").read_text())
+            self.assertIn("reporting_peers", routeviews[0])
             meta = json.loads((dump / "ripestat.network-info" / "output.json").read_text())
             self.assertEqual(meta["status"], 200)
             self.assertIn("asns", meta["parsed"])

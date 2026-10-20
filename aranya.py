@@ -26,6 +26,16 @@ def _default_db() -> str:
     return os.path.join(root, "aranya", "aranya.db")
 
 
+def _write_raw_json(path, body) -> None:
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError):
+        data = {"raw": body}
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
 def _dump_source(directory, source, url, status, body, error, parsed) -> None:
     if not directory:
         return
@@ -34,6 +44,7 @@ def _dump_source(directory, source, url, status, body, error, parsed) -> None:
     if body is not None:
         with open(os.path.join(source_dir, "output.txt"), "w", encoding="utf-8") as handle:
             handle.write(body)
+        _write_raw_json(os.path.join(source_dir, "raw_output.json"), body)
     meta = {"source": source, "url": url, "status": status, "error": error, "parsed": parsed}
     with open(os.path.join(source_dir, "output.json"), "w", encoding="utf-8") as handle:
         json.dump(meta, handle, ensure_ascii=False, indent=2, sort_keys=True, default=str)

@@ -26,6 +26,10 @@ aranya --clear-ip 8.8.8.8                      # empty just that IP and exit
 python3 -m unittest discover -s tests          # 126 tests, fully offline
 ```
 
+Each dump source folder contains `output.txt` (raw body), `raw_output.json`
+(the body as JSON; non-JSON bodies are wrapped as `{"raw": ...}`), and
+`output.json` (status, URL, parsed observations).
+
 Re-running an IP replaces that source's observations, so views do not accumulate
 duplicates; `fetches` are kept as raw history. `--clear` and `--clear-ip` remove
 both.
