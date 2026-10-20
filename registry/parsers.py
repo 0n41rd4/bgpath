@@ -271,9 +271,21 @@ def routeviews_prefix(body: str) -> dict:
                 "prefix": item.get("prefix"),
                 "origin_asn": item.get("origin_asn"),
                 "rpki_state": item.get("rpki_state"),
+                "rpki_roas": item.get("rpki_roas"),
                 "peers": len(peers),
                 "collectors": sorted({peer.get("collector") for peer in peers if peer.get("collector")}),
                 "as_paths": sorted({peer.get("as_path") for peer in peers if peer.get("as_path")}),
+                "reporting_peers": [
+                    {
+                        "peer_asn": peer.get("peer_asn"),
+                        "peer_addr": peer.get("peer_addr"),
+                        "collector": peer.get("collector"),
+                        "as_path": peer.get("as_path"),
+                        "communities": peer.get("communities"),
+                        "timestamp": peer.get("timestamp"),
+                    }
+                    for peer in peers
+                ],
             }
         )
     return {"routes": routes}

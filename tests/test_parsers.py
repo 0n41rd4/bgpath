@@ -107,6 +107,11 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertEqual(best["origin_asn"], 15169)
         self.assertEqual(best["rpki_state"], "valid")
         self.assertTrue(best["as_paths"])
+        self.assertEqual(best["rpki_roas"][0]["asn"], 15169)
+        pairs = {(peer["collector"], peer["as_path"]) for peer in best["reporting_peers"]}
+        self.assertIn(("amsix.ams", "2119 15169"), pairs)
+        self.assertIn(("amsix.ams", "398465 1299 15169"), pairs)
+        self.assertEqual(len(best["reporting_peers"]), best["peers"])
 
     def test_routeviews_announcements(self):
         r = parsers.routeviews_announcements(load("routeviews_announcements.json"))
