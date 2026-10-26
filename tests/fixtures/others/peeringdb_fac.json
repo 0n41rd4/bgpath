@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "Equinix DC1-DC15,DC21-DC22 - Ashburn",
+      "city": "Ashburn",
+      "country": "US",
+      "latitude": 39.0438,
+      "longitude": -77.4874
+    }
+  ]
+}

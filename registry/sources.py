@@ -400,6 +400,62 @@ def _routeviews_obs(ip: str, parsed: dict) -> list[dict]:
     return obs
 
 
+def _best_prefix(prefixes) -> str | None:
+    best = None
+    best_length = -1
+    for prefix in prefixes:
+        if not prefix or "/" not in prefix:
+            continue
+        try:
+            length = int(prefix.split("/")[1])
+        except ValueError:
+            continue
+        if length > best_length:
+            best, best_length = prefix, length
+    return best
+
+
+def _ris_obs(ip: str, parsed: dict) -> list[dict]:
+    obs: list[dict] = []
+    prefixes = [
+        peer.get("prefix")
+        for rrc in parsed["rrcs"]
+        for peer in rrc["peers"]
+        if peer.get("prefix")
+    ]
+    best = _best_prefix(prefixes)
+    if best:
+        obs.append(_obs("ownership", "prefix", best))
+        origin = None
+        for rrc in parsed["rrcs"]:
+            for peer in rrc["peers"]:
+                if peer.get("prefix") == best:
+                    origin = peer.get("asn_origin")
+                    if not origin and peer.get("as_path"):
+                        origin = peer["as_path"].split()[-1]
+                    break
+            if origin is not None:
+                break
+        if origin:
+            obs.append(_obs("ownership", "asn", str(origin)))
+    for rrc in parsed["rrcs"]:
+        obs.append(
+            _obs(
+                "routing",
+                "ris",
+                {
+                    "rrc": rrc.get("rrc"),
+                    "location": rrc.get("location"),
+                    "scope": rrc.get("scope"),
+                    "peers": len(rrc["peers"]),
+                    "prefixes": sorted({peer.get("prefix") for peer in rrc["peers"] if peer.get("prefix")}),
+                    "paths": sorted({peer.get("as_path") for peer in rrc["peers"] if peer.get("as_path")}),
+                },
+            )
+        )
+    return obs
+
+
 def _atlas_obs(ip: str, parsed: dict) -> list[dict]:
     return [
         _obs(
@@ -462,6 +518,30 @@ def _peeringdb_fac_obs(ip: str, parsed: dict) -> list[dict]:
 
 def _peeringdb_ixpfx_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("ix", "prefix", item) for item in parsed["prefixes"]]
+
+
+def _followup_facilities(parsed: dict, context: dict) -> list[tuple[str, dict, str]]:
+    seen = set()
+    followups = []
+    for facility in parsed.get("facilities") or []:
+        fac_id = facility.get("fac_id")
+        if fac_id is None or fac_id in seen:
+            continue
+        seen.add(fac_id)
+        followups.append(("peeringdb.fac", {"fac_id": fac_id}, str(fac_id)))
+    return followups
+
+
+def _followup_ixlans(parsed: dict, context: dict) -> list[tuple[str, dict, str]]:
+    seen = set()
+    followups = []
+    for item in parsed.get("ix") or []:
+        ixlan_id = item.get("ixlan_id")
+        if ixlan_id is None or ixlan_id in seen:
+            continue
+        seen.add(ixlan_id)
+        followups.append(("peeringdb.ixpfx", {"ixlan_id": ixlan_id}, str(ixlan_id)))
+    return followups
 
 
 def _crtsh_obs(ip: str, parsed: dict) -> list[dict]:
@@ -544,6 +624,7 @@ SOURCES: list[dict] = [
         "upstream": "RIPE NCC (RIS)",
         "evidence_class": "reported",
         "needs": ["asn"],
+        "scope": "as",
         "url": lambda ctx: f"https://stat.ripe.net/data/as-overview/data.json?resource=AS{ctx['asn']}",
         "parse": ripe.as_overview,
         "observations": _as_overview_obs,
@@ -554,6 +635,7 @@ SOURCES: list[dict] = [
         "upstream": "RIPE NCC (RIS)",
         "evidence_class": "reported",
         "needs": ["asn"],
+        "scope": "as",
         "url": lambda ctx: f"https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS{ctx['asn']}",
         "parse": ripe.asn_neighbours,
         "observations": _asn_neighbours_obs,
@@ -592,6 +674,16 @@ SOURCES: list[dict] = [
         "parse": parsers.routeviews_prefix,
         "observations": _routeviews_obs,
         "provides": _routeviews_provides,
+    },
+    {
+        "id": "ris.looking-glass",
+        "upstream": "RIPE NCC RIS",
+        "evidence_class": "observed-passive",
+        "needs": [],
+        "url": lambda ctx: f"https://stat.ripe.net/data/looking-glass/data.json?resource={ctx['ip']}",
+        "parse": ripe.looking_glass,
+        "observations": _ris_obs,
+        "provides": lambda parsed: {},
     },
     {
         "id": "irr.origin",
@@ -682,6 +774,7 @@ SOURCES: list[dict] = [
         "upstream": "RIPE Atlas",
         "evidence_class": "observed-passive",
         "needs": ["asn"],
+        "scope": "as",
         "url": lambda ctx: f"https://atlas.ripe.net/api/v2/probes/?asn_v4={ctx['asn']}&page_size=100&fields=id,asn_v4,country_code",
         "parse": parsers.atlas_probes,
         "observations": _atlas_probes_obs,
@@ -692,6 +785,7 @@ SOURCES: list[dict] = [
         "upstream": "PeeringDB",
         "evidence_class": "reported",
         "needs": ["asn"],
+        "scope": "as",
         "url": lambda ctx: f"https://www.peeringdb.com/api/net?asn={ctx['asn']}",
         "parse": parsers.peeringdb_net,
         "observations": _peeringdb_net_obs,
@@ -702,22 +796,26 @@ SOURCES: list[dict] = [
         "upstream": "PeeringDB",
         "evidence_class": "reported",
         "needs": ["net_id"],
+        "scope": "as",
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/netfac?net_id={ctx['net_id']}",
         "parse": parsers.peeringdb_netfac,
         "observations": _peeringdb_netfac_obs,
         "provides": lambda parsed: {},
+        "followups": _followup_facilities,
     },
     {
         "id": "peeringdb.netixlan",
         "upstream": "PeeringDB",
         "evidence_class": "reported",
         "needs": ["net_id"],
+        "scope": "as",
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/netixlan?net_id={ctx['net_id']}",
         "parse": parsers.peeringdb_netixlan,
         "observations": _peeringdb_netixlan_obs,
         "provides": lambda parsed: {},
+        "followups": _followup_ixlans,
     },
     {
         "id": "peeringdb.fac",
@@ -725,6 +823,7 @@ SOURCES: list[dict] = [
         "evidence_class": "reported",
         "needs": ["fac_id"],
         "contextual": True,
+        "scope": "as",
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/fac?id={ctx['fac_id']}",
         "parse": parsers.peeringdb_fac,
@@ -737,6 +836,7 @@ SOURCES: list[dict] = [
         "evidence_class": "reported",
         "needs": ["ixlan_id"],
         "contextual": True,
+        "scope": "as",
         "delay": 1.2,
         "url": lambda ctx: f"https://www.peeringdb.com/api/ixpfx?ixlan_id={ctx['ixlan_id']}",
         "parse": parsers.peeringdb_ixpfx,

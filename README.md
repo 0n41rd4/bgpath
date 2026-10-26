@@ -7,10 +7,9 @@ the full brief.
 
 Phase 1 (fetch + raw store + observations), phase 2 (comparison + HTML report),
 phase 3 (more sources), phase 4 (entity normalization) and phase 5 (cross-IP
-analysis) are implemented. 20 always-on sources + 2 PeeringDB sub-resource lookups
-(facility coordinates, IX peering-LAN prefix; contextual) + 5 optional query an IP in
-dependency waves; raw responses land in the `fetches` table, normalized claims
-in the `observations` table.
+analysis) are implemented. 21 always-on sources + PeeringDB facility/IX follow-ups +
+5 optional query an IP in dependency waves; raw responses land in the `fetches`
+table, normalized claims in the `observations` table.
 
 ## Usage
 
@@ -23,12 +22,14 @@ aranya --ips 8.8.8.8,1.1.1.1 --dump            # one timestamp folder, one subfo
 aranya --update-dbs                            # refresh the MaxMind/DB-IP .mmdb files
 aranya --clear                                 # empty the whole database and exit
 aranya --clear-ip 8.8.8.8                      # empty just that IP and exit
-python3 -m unittest discover -s tests          # 126 tests, fully offline
+python3 -m unittest discover -s tests          # 130 tests, fully offline
 ```
 
 Each dump source folder contains `output.txt` (raw body), `raw_output.json`
 (the body as JSON; non-JSON bodies are wrapped as `{"raw": ...}`), and
-`output.json` (status, URL, parsed observations).
+`output.json` (status, URL, parsed observations). AS-scoped sources live under
+`AS<asn>/`; PeeringDB facility and IX follow-ups add a per-ID subfolder
+(`AS15169/peeringdb.fac/1/`, `AS15169/peeringdb.ixpfx/128/`).
 
 Re-running an IP replaces that source's observations, so views do not accumulate
 duplicates; `fetches` are kept as raw history. `--clear` and `--clear-ip` remove
@@ -165,11 +166,12 @@ makes a disagreement meaningful:
 | `ripestat.network-info`, `ripestat.as-overview`, `ripestat.asn-neighbours` | RIPE NCC (RIS BGP) | observed-passive |
 | `ripestat.geoloc` | RIPE NCC (embeds MaxMind/IP2Location) | reported |
 | `ipmap` | RIPE NCC (Atlas latency engine + rDNS) | inferred |
-| `routeviews.prefix` | RouteViews collectors (U of Oregon + 9 IXes) + Routinator/rpki-client | observed-passive |
+| `routeviews.prefix` | RouteViews API collectors (IXP + U of Oregon) + Routinator/rpki-client | observed-passive |
+| `ris.looking-glass` | RIPE NCC RIS Remote Route Collectors (RRCs) | observed-passive |
 | `cymru.origin` | Team Cymru BGP (via DNS) | observed-passive |
 | `irr.origin` | RADb / IRR route objects (registered intent) | reported |
 | `rdap` | RIR RDAP | reported |
-| `peeringdb.net`, `peeringdb.netfac`, `peeringdb.netixlan` | PeeringDB directory | reported |
+| `peeringdb.net`, `peeringdb.netfac`, `peeringdb.netixlan`, `peeringdb.fac`, `peeringdb.ixpfx` | PeeringDB directory (facility/IX lookups follow the net) | reported |
 | `ip.guide` | ip.guide | reported |
 | `ipwho.is` | ipwho.is | reported |
 | `rdns.ptr` | DNS PTR | reported |

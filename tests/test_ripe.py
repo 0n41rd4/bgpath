@@ -39,6 +39,12 @@ class RipestatTest(unittest.TestCase):
         self.assertGreater(len(r["neighbours"]), 0)
         self.assertIn("unique", r["neighbour_counts"])
 
+    def test_looking_glass(self):
+        r = ripe.looking_glass(load("looking-glass.json"))
+        self.assertEqual(r["rrcs"][0]["rrc"], "RRC01")
+        self.assertEqual(r["rrcs"][0]["peers"][0]["as_path"], "15692 2914 15169")
+        self.assertEqual(r["rrcs"][0]["peers"][0]["prefix"], "8.8.8.0/24")
+
 
 class IpmapTest(unittest.TestCase):
     def test_ipmap(self):

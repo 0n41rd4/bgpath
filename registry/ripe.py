@@ -72,6 +72,42 @@ def asn_neighbours(body: str) -> dict:
     }
 
 
+def looking_glass(body: str) -> dict:
+    data = _ripestat_data(body)
+    rrcs: list[dict] = []
+    for rrc in data.get("rrcs") or []:
+        if not isinstance(rrc, dict):
+            continue
+        peers: list[dict] = []
+        for peer in rrc.get("peers") or []:
+            if not isinstance(peer, dict):
+                continue
+            peers.append(
+                {
+                    "peer": peer.get("peer"),
+                    "asn_origin": peer.get("asn_origin"),
+                    "as_path": peer.get("as_path"),
+                    "prefix": peer.get("prefix"),
+                    "next_hop": peer.get("next_hop"),
+                    "last_updated": peer.get("last_updated"),
+                    "community": peer.get("community"),
+                }
+            )
+        rrcs.append(
+            {
+                "rrc": rrc.get("rrc"),
+                "location": rrc.get("location"),
+                "scope": rrc.get("scope"),
+                "peers": peers,
+            }
+        )
+    return {
+        "query_time": data.get("query_time"),
+        "latest_time": data.get("latest_time"),
+        "rrcs": rrcs,
+    }
+
+
 def ipmap(body: str) -> dict:
     payload = json.loads(body)
     if not isinstance(payload, dict):

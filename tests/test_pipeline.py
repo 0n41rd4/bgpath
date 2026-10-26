@@ -39,6 +39,8 @@ def make_fetch():
             body = (OTHERS / "cymru.json").read_text()
         elif "api.routeviews.org" in url:
             body = (OTHERS / "routeviews_prefix.json").read_text()
+        elif "looking-glass" in url:
+            body = (RIPE / "looking-glass.json").read_text()
         elif "atlas.ripe.net" in url:
             body = (OTHERS / "atlas.json").read_text()
         elif url.startswith("IRR "):
@@ -63,6 +65,10 @@ def make_fetch():
             body = (OTHERS / "peeringdb_netfac.json").read_text()
         elif "netixlan" in url:
             body = (OTHERS / "peeringdb_netixlan.json").read_text()
+        elif "peeringdb.com/api/fac" in url:
+            body = (OTHERS / "peeringdb_fac.json").read_text()
+        elif "peeringdb.com/api/ixpfx" in url:
+            body = (OTHERS / "peeringdb_ixpfx.json").read_text()
         elif "peeringdb.com/api/net" in url:
             body = (OTHERS / "peeringdb_net.json").read_text()
         elif "crt.sh" in url:
@@ -87,12 +93,14 @@ class PipelineTest(unittest.TestCase):
                 self.assertTrue(status.startswith("skipped"), f"{source_id}: {status}")
             else:
                 self.assertEqual(status, "ok", f"{source_id}: {status}")
-        self.assertIn("contextual", statuses["peeringdb.fac"])
+        self.assertEqual(statuses["peeringdb.fac[1]"], "ok")
+        self.assertEqual(statuses["peeringdb.ixpfx[128]"], "ok")
 
         self.assertEqual(parsed["ripestat.network-info"]["asns"], ["15169"])
         self.assertEqual(parsed["peeringdb.net"]["net_id"], 433)
         self.assertEqual(parsed["rdns.ptr"]["hostname"], "dns.google")
         self.assertEqual(parsed["routeviews.prefix"]["routes"][0]["origin_asn"], 15169)
+        self.assertEqual(parsed["ris.looking-glass"]["rrcs"][0]["rrc"], "RRC01")
         self.assertEqual(parsed["atlas.ping"]["results"][0]["prb_id"], 1002934)
         self.assertEqual(parsed["irr.origin"]["objects"][0]["origin"], "AS15169")
 
@@ -135,11 +143,23 @@ class PipelineTest(unittest.TestCase):
             untraced = conn.execute(
                 "SELECT COUNT(*) FROM observations WHERE fetch_id IS NULL"
             ).fetchone()
+            ris = conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE source = 'ris.looking-glass' AND key = 'ris'"
+            ).fetchone()
+            facs = conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE source = 'peeringdb.fac'"
+            ).fetchone()
+            ixs = conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE source = 'peeringdb.ixpfx'"
+            ).fetchone()
             conn.close()
 
         self.assertTrue(asns)
         self.assertGreater(locations[0], 0)
         self.assertEqual(untraced[0], 0)
+        self.assertGreater(ris[0], 0)
+        self.assertGreater(facs[0], 0)
+        self.assertGreater(ixs[0], 0)
 
     def test_verbose_progress(self):
         stream = io.StringIO()
@@ -246,6 +266,38 @@ class PipelineTest(unittest.TestCase):
             self.assertIn("source\tstatus\tfolder", status)
             self.assertIn("ripestat.network-info\t", status)
             self.assertIn("ripestat.network-info/", status)
+
+    def test_dump_as_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            dump = Path(tmp) / "dump" / "8.8.8.8"
+            aranya.run_all(conn, "8.8.8.8", fetch=make_fetch(), dump_dir=str(dump))
+            conn.close()
+            self.assertTrue((dump / "AS15169" / "peeringdb.net" / "output.txt").exists())
+            self.assertTrue((dump / "AS15169" / "ripestat.as-overview" / "output.txt").exists())
+            self.assertTrue((dump / "AS15169" / "atlas.probes" / "output.txt").exists())
+            self.assertTrue((dump / "AS15169" / "peeringdb.fac" / "1" / "output.txt").exists())
+            self.assertTrue((dump / "AS15169" / "peeringdb.ixpfx" / "128" / "output.txt").exists())
+            self.assertFalse((dump / "peeringdb.net").exists())
+            status = (dump / "_status.txt").read_text()
+            self.assertIn("AS15169/peeringdb.net", status)
+            self.assertIn("AS15169/peeringdb.fac/1", status)
+            self.assertIn("\trouteviews.prefix/", status)
+
+    def test_followups_dedupe(self):
+        facilities = {"facilities": [{"fac_id": 1}, {"fac_id": 1}, {"fac_id": 2}]}
+        ixlans = {"ix": [{"ixlan_id": 7}, {"ixlan_id": 7}, {"ixlan_id": 8}]}
+        self.assertEqual(len(sources._followup_facilities(facilities, {})), 2)
+        self.assertEqual(len(sources._followup_ixlans(ixlans, {})), 2)
+
+    def test_main_prints_followup_statuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "t.db")
+            statuses = {"peeringdb.fac[1]": "ok", "routeviews.prefix": "ok"}
+            with mock.patch.object(aranya, "run_all", return_value=(statuses, {})):
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(aranya.main(["--db", path, "8.8.8.8"]), 0)
+        self.assertIn("peeringdb.fac[1]", out.getvalue())
 
     def test_missing_dependencies_skip(self):
         def failing_fetch(url):

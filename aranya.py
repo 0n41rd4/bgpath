@@ -36,10 +36,11 @@ def _write_raw_json(path, body) -> None:
         handle.write("\n")
 
 
-def _dump_source(directory, source, url, status, body, error, parsed) -> None:
+def _dump_source(directory, source, url, status, body, error, parsed, scope=None, subdir=None) -> None:
     if not directory:
         return
-    source_dir = os.path.join(directory, source)
+    relative = subdir or (os.path.join(scope, source) if scope else source)
+    source_dir = os.path.join(directory, relative)
     os.makedirs(source_dir, exist_ok=True)
     if body is not None:
         with open(os.path.join(source_dir, "output.txt"), "w", encoding="utf-8") as handle:
@@ -87,14 +88,18 @@ def run_adapter(
     context: dict,
     fetch=None,
     dump_dir=None,
+    scope=None,
+    subdir=None,
+    reset=True,
 ) -> tuple[str, object]:
-    store.delete_observations(conn, ip, adapter["id"])
+    if reset:
+        store.delete_observations(conn, ip, adapter["id"])
     if "precheck" in adapter:
         reason = adapter["precheck"]()
         if reason:
             status = f"skipped ({reason})"
             store.save_fetch(conn, adapter["id"], adapter["id"], None, None, status, ip)
-            _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None)
+            _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None, scope=scope, subdir=subdir)
             return status, None
 
     url = adapter["url"](context)
@@ -109,13 +114,13 @@ def run_adapter(
     fetch_id = store.save_fetch(conn, adapter["id"], sources.redact_url(url), status, body, error, ip)
 
     if error:
-        _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, error, None)
+        _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, error, None, scope=scope, subdir=subdir)
         return f"error ({error})", None
 
     try:
         parsed, observations = observe.observe(adapter, ip, body)
     except ValueError as exc:
-        _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, f"parse error ({exc})", None)
+        _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, f"parse error ({exc})", None, scope=scope, subdir=subdir)
         return f"parse error ({exc})", None
 
     for key, value in adapter["provides"](parsed).items():
@@ -137,59 +142,112 @@ def run_adapter(
             fetch_id,
         )
 
-    _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, None, parsed)
+    _dump_source(dump_dir, adapter["id"], sources.redact_url(url), status, body, None, parsed, scope=scope, subdir=subdir)
     return "ok", parsed
+
+
+def _scope_for(adapter: dict, context: dict) -> str | None:
+    asn = context.get("asn")
+    if adapter.get("scope") == "as" and asn:
+        return f"AS{asn}"
+    return None
+
+
+def _folder_for(adapter: dict, scope: str | None, suffix: str | None = None) -> str:
+    return os.path.join(*[part for part in (scope, adapter["id"], suffix) if part])
 
 
 def run_all(conn, ip: str, fetch=None, dump_dir=None, verbose: bool = False) -> dict:
     context: dict = {"ip": ip}
-    remaining = list(sources.SOURCES)
+    contextual = {adapter["id"]: adapter for adapter in sources.SOURCES if adapter.get("contextual")}
+    jobs = [
+        {"adapter": adapter, "overrides": {}, "display": adapter["id"], "suffix": None}
+        for adapter in sources.SOURCES
+        if not adapter.get("contextual")
+    ]
     statuses: dict[str, str] = {}
     parsed_results: dict[str, object] = {}
-    total = len(remaining)
+    folders: dict[str, str] = {}
+    reset_sources: set[str] = set()
+    total = len(jobs)
     done = 0
     if verbose:
-        print(f"fetching {total} sources for {ip}", file=sys.stderr, flush=True)
+        print(f"fetching {total} sources for {ip} (plus follow-ups)", file=sys.stderr, flush=True)
 
     progressed = True
-    while remaining and progressed:
+    while jobs and progressed:
         progressed = False
-        for adapter in list(remaining):
-            if not all(key in context for key in adapter["needs"]):
+        for job in list(jobs):
+            adapter = job["adapter"]
+            ctx = context if not job["overrides"] else {**context, **job["overrides"]}
+            if not all(key in ctx for key in adapter["needs"]):
                 continue
-            remaining.remove(adapter)
+            jobs.remove(job)
             progressed = True
+            scope = _scope_for(adapter, context)
+            folder = _folder_for(adapter, scope, job["suffix"])
+            reset = adapter["id"] not in reset_sources
+            reset_sources.add(adapter["id"])
             started = time.perf_counter()
-            status, parsed = run_adapter(conn, adapter, ip, context, fetch, dump_dir)
-            statuses[adapter["id"]] = status
-            parsed_results[adapter["id"]] = parsed
+            status, parsed = run_adapter(
+                conn, adapter, ip, ctx, fetch, dump_dir, scope=scope, subdir=folder, reset=reset
+            )
+            statuses[job["display"]] = status
+            parsed_results[job["display"]] = parsed
+            folders[job["display"]] = folder
             done += 1
             if verbose:
                 print(
-                    f"[{done:>2}/{total}] {adapter['id']:<26} {status:<30} {time.perf_counter() - started:5.1f}s",
+                    f"[{done:>2}/{total}] {job['display']:<26} {status:<30} {time.perf_counter() - started:5.1f}s",
                     file=sys.stderr,
                     flush=True,
                 )
+            followups = adapter.get("followups")
+            if followups and parsed:
+                for target_id, overrides, suffix in followups(parsed, ctx):
+                    target = contextual.get(target_id)
+                    if target is None:
+                        continue
+                    jobs.append(
+                        {
+                            "adapter": target,
+                            "overrides": overrides,
+                            "display": f"{target_id}[{suffix}]",
+                            "suffix": suffix,
+                        }
+                    )
+                    total += 1
 
-    for adapter in remaining:
+    for job in jobs:
+        adapter = job["adapter"]
         store.delete_observations(conn, ip, adapter["id"])
-        if adapter.get("contextual"):
-            status = f"skipped (contextual: needs {', '.join(adapter['needs'])})"
-        else:
-            status = f"skipped (missing {', '.join(adapter['needs'])})"
-        statuses[adapter["id"]] = status
+        status = f"skipped (missing {', '.join(adapter['needs'])})"
+        statuses[job["display"]] = status
+        scope = _scope_for(adapter, context)
+        folder = _folder_for(adapter, scope, job["suffix"])
+        folders[job["display"]] = folder
         store.save_fetch(conn, adapter["id"], adapter["id"], None, None, status, ip)
-        _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None)
+        _dump_source(dump_dir, adapter["id"], adapter["id"], None, None, status, None, scope=scope, subdir=folder)
         done += 1
         if verbose:
-            print(f"[{done:>2}/{total}] {adapter['id']:<26} {status}", file=sys.stderr, flush=True)
+            print(f"[{done:>2}/{total}] {job['display']:<26} {status}", file=sys.stderr, flush=True)
+
+    for source_id, adapter in contextual.items():
+        if any(key == source_id or key.startswith(f"{source_id}[") for key in statuses):
+            continue
+        store.delete_observations(conn, ip, source_id)
+        statuses[source_id] = f"skipped (contextual: no {', '.join(adapter['needs'])})"
+        scope = _scope_for(adapter, context)
+        folders[source_id] = _folder_for(adapter, scope)
+        if verbose:
+            print(f"     {source_id:<26} {statuses[source_id]}", file=sys.stderr, flush=True)
 
     if dump_dir:
         os.makedirs(dump_dir, exist_ok=True)
         with open(os.path.join(dump_dir, "_status.txt"), "w", encoding="utf-8") as handle:
             handle.write("source\tstatus\tfolder\n")
-            for source_id, status in statuses.items():
-                handle.write(f"{source_id}\t{status}\t{source_id}/\n")
+            for display, status in statuses.items():
+                handle.write(f"{display}\t{status}\t{folders.get(display, display)}/\n")
 
     return statuses, parsed_results
 
@@ -369,8 +427,8 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"aranya {target}\n")
         print("sources:")
-        for adapter in sources.SOURCES:
-            print(f"  {statuses[adapter['id']]:<12} {adapter['id']}")
+        for source_id, status in statuses.items():
+            print(f"  {status:<12} {source_id}")
 
         print_summary(conn, target)
         print_comparison(conn, target)

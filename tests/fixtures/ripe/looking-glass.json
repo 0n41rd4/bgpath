@@ -1,0 +1,49 @@
+{
+  "data": {
+    "query_time": "2026-10-20T00:52:15",
+    "latest_time": "2026-10-20T00:51:49",
+    "rrcs": [
+      {
+        "rrc": "RRC01",
+        "location": "London, GB",
+        "scope": "LINX / LONAP",
+        "peers": [
+          {
+            "peer": "5.57.80.113",
+            "asn_origin": "15169",
+            "as_path": "15692 2914 15169",
+            "prefix": "8.8.8.0/24",
+            "next_hop": "5.57.80.113",
+            "last_updated": "2026-10-20T00:51:00",
+            "community": ""
+          },
+          {
+            "peer": "5.57.80.210",
+            "asn_origin": "15169",
+            "as_path": "8218 6461 15169",
+            "prefix": "8.8.8.0/24",
+            "next_hop": "5.57.80.210",
+            "last_updated": "2026-10-20T00:51:01",
+            "community": ""
+          }
+        ]
+      },
+      {
+        "rrc": "RRC03",
+        "location": "Amsterdam, NL",
+        "scope": "AMS-IX / NL-IX",
+        "peers": [
+          {
+            "peer": "80.249.208.34",
+            "asn_origin": "15169",
+            "as_path": "1103 20562 15169",
+            "prefix": "8.8.8.0/24",
+            "next_hop": "80.249.208.34",
+            "last_updated": "2026-10-20T00:51:02",
+            "community": ""
+          }
+        ]
+      }
+    ]
+  }
+}
