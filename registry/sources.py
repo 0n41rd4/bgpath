@@ -8,6 +8,7 @@ result into normalized observations (topic/key/value) with provenance.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -21,16 +22,20 @@ from . import parsers, ripe
 TIMEOUT = 20
 USER_AGENT = "aranya/0.0"
 GLOBALPING_URL = "https://api.globalping.io/v1/measurements"
+BGPROUTES_API_URL = "https://api.bgproutes.io/v1"
 ATLAS_MEASUREMENTS_URL = "https://atlas.ripe.net/api/v2/measurements/"
 ATLAS_RESULTS_URL = "https://atlas.ripe.net/api/v2/measurements/{mid}/results/"
 
 
-def http_get(url: str, timeout: int = TIMEOUT, retries: int = 2) -> tuple[int | None, str | None, str | None]:
+def http_get(
+    url: str, timeout: int = TIMEOUT, retries: int = 2, headers: dict | None = None
+) -> tuple[int | None, str | None, str | None]:
     last_status: int | None = None
     last_body: str | None = None
     last_error: str | None = None
+    request_headers = {"User-Agent": USER_AGENT, **(headers or {})}
     for attempt in range(retries + 1):
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        req = urllib.request.Request(url, headers=request_headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 status = resp.status
@@ -200,9 +205,7 @@ def warnings() -> list[str]:
         items.append("SHODAN_API_KEY not set (shodan.host skipped; internetdb still runs)")
     if not _env("MAXMIND_LICENSE_KEY"):
         items.append("MAXMIND_LICENSE_KEY not set (MaxMind databases cannot be refreshed)")
-    try:
-        import maxminddb  # noqa: F401
-    except ImportError:
+    if importlib.util.find_spec("maxminddb") is None:
         items.append("maxminddb not installed (MaxMind/DB-IP sources skipped)")
     for env_name, filename, label, max_age in DB_FRESHNESS:
         path = _db_path(env_name, filename)
@@ -219,9 +222,7 @@ def _mmdb_precheck(env_name: str, filename: str) -> str | None:
     path = _db_path(env_name, filename)
     if not os.path.isfile(path):
         return f"{path} not found"
-    try:
-        import maxminddb  # noqa: F401
-    except ImportError:
+    if importlib.util.find_spec("maxminddb") is None:
         return "maxminddb not installed (pip install maxminddb)"
     return None
 
@@ -383,6 +384,74 @@ def _best_route(parsed: dict) -> dict:
     return best
 
 
+def _bgproutes_get(path: str, params: dict, key: str) -> dict:
+    from urllib.parse import urlencode
+    url = f"{BGPROUTES_API_URL}{path}?{urlencode(params)}"
+    status, body, error = http_get(url, headers={"x-api-key": key, "accept": "application/json"})
+    if error:
+        raise RuntimeError(error)
+    return json.loads(body)
+
+
+def _fetch_bgproutes(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:
+    prefix = ctx.get("prefix")
+    key = _env("BGP_API_KEY")
+    if not prefix:
+        return None, None, "no prefix for bgproutes lookup"
+    if not key:
+        return None, None, "BGP_API_KEY not set"
+    try:
+        sources_filter = ctx.get("sources") or "bgproutes.io"
+        vp_limit = ctx.get("vp_limit") or 5
+        vps = _bgproutes_get(
+            "/vantage_points",
+            {"sources": sources_filter, "peering_protocol": "bgp", "status": "ready", "data_afi": 4},
+            key,
+        )
+        bgp_vps = [
+            vp for vp in ((vps.get("data") or {}).get("bgp") or [])
+            if "ready" in (vp.get("status") or [])
+        ][:vp_limit]
+        ids = [str(vp["id"]) for vp in bgp_vps if vp.get("id") is not None]
+        if not ids:
+            return None, None, "no bgproutes.io BGP vantage points"
+        date = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        rib = _bgproutes_get(
+            "/rib",
+            {
+                "vp_bgp_ids": ",".join(ids),
+                "prefix_exact_match": prefix,
+                "date": date,
+                "return_community": "false",
+                "return_rov_status": "true",
+            },
+            key,
+        )
+    except (RuntimeError, ValueError) as exc:
+        return None, None, str(exc)
+    return 200, json.dumps({"vantage_points": {"data": {"bgp": bgp_vps}}, "rib": rib}), None
+
+
+def _fetch_bgp_tools(ip: str, ctx: dict) -> tuple[int | None, str | None, str | None]:
+    try:
+        conn = socket.create_connection(("bgp.tools", 43), timeout=TIMEOUT)
+        try:
+            conn.sendall(f"{ip}\n".encode())
+            chunks: list[bytes] = []
+            total = 0
+            while total < 65536:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+        finally:
+            conn.close()
+    except Exception as exc:
+        return None, None, str(exc)
+    return 200, b"".join(chunks).decode("utf-8", "replace"), None
+
+
 def _routeviews_provides(parsed: dict) -> dict:
     best = _best_route(parsed)
     return {"asn": best.get("origin_asn"), "prefix": best.get("prefix")}
@@ -397,7 +466,61 @@ def _routeviews_obs(ip: str, parsed: dict) -> list[dict]:
         obs.append(_obs("ownership", "prefix", best["prefix"]))
     if best.get("rpki_state"):
         obs.append(_obs("routing", "rpki", best["rpki_state"]))
+    if best.get("prefix"):
+        obs.append(
+            _obs(
+                "routing",
+                "routeviews",
+                {
+                    "prefix": best.get("prefix"),
+                    "origin_asn": best.get("origin_asn"),
+                    "rpki_state": best.get("rpki_state"),
+                    "collectors": best.get("collectors") or [],
+                    "peer_count": best.get("peers"),
+                    "as_paths": best.get("as_paths") or [],
+                    "reporting_peers": best.get("reporting_peers") or [],
+                },
+            )
+        )
     return obs
+
+
+def _bgp_tools_obs(ip: str, parsed: dict) -> list[dict]:
+    if not parsed.get("prefix"):
+        return []
+    return [
+        _obs(
+            "routing",
+            "bgptools",
+            {
+                "asn": parsed.get("asn"),
+                "prefix": parsed.get("prefix"),
+                "country": parsed.get("country"),
+                "registry": parsed.get("registry"),
+                "allocated": parsed.get("allocated"),
+                "name": parsed.get("name"),
+            },
+        )
+    ]
+
+
+def _bgproutes_obs(ip: str, parsed: dict) -> list[dict]:
+    return [
+        _obs(
+            "routing",
+            "bgproutes",
+            {
+                "collector": route.get("collector"),
+                "vp_id": route.get("vp_id"),
+                "vp_label": route.get("vp_label"),
+                "prefix": route.get("prefix"),
+                "as_path": route.get("as_path"),
+                "rov_status": route.get("rov_status"),
+            },
+        )
+        for route in parsed.get("routes") or []
+        if route.get("prefix")
+    ]
 
 
 def _best_prefix(prefixes) -> str | None:
@@ -513,35 +636,37 @@ def _peeringdb_netixlan_obs(ip: str, parsed: dict) -> list[dict]:
 
 
 def _peeringdb_fac_obs(ip: str, parsed: dict) -> list[dict]:
-    return [_obs("facility", "location", parsed)]
+    return [_obs("facility", "location", facility) for facility in parsed["facilities"]]
 
 
 def _peeringdb_ixpfx_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("ix", "prefix", item) for item in parsed["prefixes"]]
 
 
-def _followup_facilities(parsed: dict, context: dict) -> list[tuple[str, dict, str]]:
-    seen = set()
-    followups = []
-    for facility in parsed.get("facilities") or []:
-        fac_id = facility.get("fac_id")
-        if fac_id is None or fac_id in seen:
-            continue
-        seen.add(fac_id)
-        followups.append(("peeringdb.fac", {"fac_id": fac_id}, str(fac_id)))
-    return followups
+def _followup_facilities(parsed: dict, context: dict) -> list[tuple[str, dict, str | None]]:
+    fac_ids = sorted(
+        {
+            facility.get("fac_id")
+            for facility in parsed.get("facilities") or []
+            if facility.get("fac_id") is not None
+        }
+    )
+    if not fac_ids:
+        return []
+    return [("peeringdb.fac", {"fac_ids": fac_ids}, None)]
 
 
-def _followup_ixlans(parsed: dict, context: dict) -> list[tuple[str, dict, str]]:
-    seen = set()
-    followups = []
-    for item in parsed.get("ix") or []:
-        ixlan_id = item.get("ixlan_id")
-        if ixlan_id is None or ixlan_id in seen:
-            continue
-        seen.add(ixlan_id)
-        followups.append(("peeringdb.ixpfx", {"ixlan_id": ixlan_id}, str(ixlan_id)))
-    return followups
+def _followup_ixlans(parsed: dict, context: dict) -> list[tuple[str, dict, str | None]]:
+    ixlan_ids = sorted(
+        {
+            item.get("ixlan_id")
+            for item in parsed.get("ix") or []
+            if item.get("ixlan_id") is not None
+        }
+    )
+    if not ixlan_ids:
+        return []
+    return [("peeringdb.ixpfx", {"ixlan_ids": ixlan_ids}, None)]
 
 
 def _crtsh_obs(ip: str, parsed: dict) -> list[dict]:
@@ -676,6 +801,31 @@ SOURCES: list[dict] = [
         "provides": _routeviews_provides,
     },
     {
+        "id": "bgp.tools",
+        "upstream": "bgp.tools",
+        "evidence_class": "observed-passive",
+        "needs": [],
+        "method": "WHOIS",
+        "url": lambda ctx: f"WHOIS bgp.tools:43 {ctx['ip']}",
+        "fetch": _fetch_bgp_tools,
+        "parse": parsers.bgp_tools,
+        "observations": _bgp_tools_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "bgproutes.prefix",
+        "upstream": "bgproutes.io",
+        "evidence_class": "observed-passive",
+        "needs": ["prefix"],
+        "method": "GET",
+        "precheck": lambda: None if _env("BGP_API_KEY") else "BGP_API_KEY not set",
+        "url": lambda ctx: f"{BGPROUTES_API_URL}/rib?prefix_exact_match={ctx['prefix']}",
+        "fetch": _fetch_bgproutes,
+        "parse": parsers.bgproutes,
+        "observations": _bgproutes_obs,
+        "provides": lambda parsed: {},
+    },
+    {
         "id": "ris.looking-glass",
         "upstream": "RIPE NCC RIS",
         "evidence_class": "observed-passive",
@@ -690,6 +840,7 @@ SOURCES: list[dict] = [
         "upstream": "IRR (RADb)",
         "evidence_class": "reported",
         "needs": ["prefix"],
+        "method": "WHOIS",
         "url": lambda ctx: f"IRR route {ctx['prefix']}",
         "fetch": _fetch_irr,
         "parse": parsers.irr,
@@ -731,6 +882,7 @@ SOURCES: list[dict] = [
         "upstream": "DNS",
         "evidence_class": "reported",
         "needs": [],
+        "method": "DNS",
         "url": lambda ctx: f"PTR {ctx['ip']}",
         "fetch": _fetch_rdns,
         "parse": parsers.rdns,
@@ -752,6 +904,7 @@ SOURCES: list[dict] = [
         "upstream": "Globalping",
         "evidence_class": "observed-active",
         "needs": [],
+        "method": "POST",
         "url": lambda ctx: GLOBALPING_URL,
         "fetch": _fetch_globalping,
         "parse": parsers.globalping,
@@ -763,6 +916,7 @@ SOURCES: list[dict] = [
         "upstream": "RIPE Atlas",
         "evidence_class": "observed-active",
         "needs": [],
+        "method": "GET",
         "url": lambda ctx: f"{ATLAS_MEASUREMENTS_URL}?target_ip={ctx['ip']}&type=ping&status=2&page_size=50",
         "fetch": _fetch_atlas,
         "parse": parsers.atlas_ping,
@@ -821,11 +975,11 @@ SOURCES: list[dict] = [
         "id": "peeringdb.fac",
         "upstream": "PeeringDB",
         "evidence_class": "reported",
-        "needs": ["fac_id"],
+        "needs": ["fac_ids"],
         "contextual": True,
         "scope": "as",
         "delay": 1.2,
-        "url": lambda ctx: f"https://www.peeringdb.com/api/fac?id={ctx['fac_id']}",
+        "url": lambda ctx: f"https://www.peeringdb.com/api/fac?id__in={','.join(str(item) for item in ctx['fac_ids'])}",
         "parse": parsers.peeringdb_fac,
         "observations": _peeringdb_fac_obs,
         "provides": lambda parsed: {},
@@ -834,11 +988,11 @@ SOURCES: list[dict] = [
         "id": "peeringdb.ixpfx",
         "upstream": "PeeringDB",
         "evidence_class": "reported",
-        "needs": ["ixlan_id"],
+        "needs": ["ixlan_ids"],
         "contextual": True,
         "scope": "as",
         "delay": 1.2,
-        "url": lambda ctx: f"https://www.peeringdb.com/api/ixpfx?ixlan_id={ctx['ixlan_id']}",
+        "url": lambda ctx: f"https://www.peeringdb.com/api/ixpfx?ixlan_id__in={','.join(str(item) for item in ctx['ixlan_ids'])}",
         "parse": parsers.peeringdb_ixpfx,
         "observations": _peeringdb_ixpfx_obs,
         "provides": lambda parsed: {},
@@ -881,6 +1035,7 @@ SOURCES: list[dict] = [
         "evidence_class": "reported",
         "needs": [],
         "precheck": lambda: _mmdb_precheck("MAXMIND_DB", "GeoLite2-City.mmdb"),
+        "method": "LOCAL",
         "url": lambda ctx: f"{_db_path('MAXMIND_DB', 'GeoLite2-City.mmdb')} {ctx['ip']}",
         "fetch": _make_mmdb_fetch("MAXMIND_DB", "GeoLite2-City.mmdb"),
         "parse": parsers.mmdb,
@@ -893,6 +1048,7 @@ SOURCES: list[dict] = [
         "evidence_class": "reported",
         "needs": [],
         "precheck": lambda: _mmdb_precheck("DBIP_DB", "dbip-city-lite.mmdb"),
+        "method": "LOCAL",
         "url": lambda ctx: f"{_db_path('DBIP_DB', 'dbip-city-lite.mmdb')} {ctx['ip']}",
         "fetch": _make_mmdb_fetch("DBIP_DB", "dbip-city-lite.mmdb"),
         "parse": parsers.mmdb,
@@ -905,6 +1061,7 @@ SOURCES: list[dict] = [
         "evidence_class": "reported",
         "needs": [],
         "precheck": lambda: _mmdb_precheck("MAXMIND_ASN_DB", "GeoLite2-ASN.mmdb"),
+        "method": "LOCAL",
         "url": lambda ctx: f"{_db_path('MAXMIND_ASN_DB', 'GeoLite2-ASN.mmdb')} {ctx['ip']}",
         "fetch": _make_mmdb_fetch("MAXMIND_ASN_DB", "GeoLite2-ASN.mmdb"),
         "parse": parsers.mmdb_asn,

@@ -14,12 +14,8 @@ import subprocess
 import sys
 import time
 
-import compare
-import export
-import render
-
 from registry import observe, sources, store
-import views
+from report import aggregate, export, labels, render, views
 
 def _default_db() -> str:
     root = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
@@ -212,7 +208,7 @@ def run_all(conn, ip: str, fetch=None, dump_dir=None, verbose: bool = False) -> 
                         {
                             "adapter": target,
                             "overrides": overrides,
-                            "display": f"{target_id}[{suffix}]",
+                            "display": f"{target_id}[{suffix}]" if suffix is not None else target_id,
                             "suffix": suffix,
                         }
                     )
@@ -264,14 +260,11 @@ def _fmt(value: object, limit: int = 100) -> str:
 
 def print_summary(conn, ip: str) -> None:
     print("\nobservations:")
-    last_topic = None
     for topic, source, key, value in conn.execute(
         "SELECT topic, source, key, value FROM v_observations WHERE ip = ?", (ip,)
     ):
-        if topic != last_topic:
-            print(f"  [{topic}]")
-            last_topic = topic
-        print(f"    {source:<22} {key:<12} {_fmt(json.loads(value))}")
+        label = render.claim_name(topic, key)
+        print(f"  {label:<14} {source:<22} {_fmt(json.loads(value), 90)}")
 
     print("\nlocations (v_locations):")
     for source, city, country, latitude, longitude in conn.execute(
@@ -282,13 +275,29 @@ def print_summary(conn, ip: str) -> None:
 
 
 def print_comparison(conn, ip: str) -> None:
-    marks = {"agree": "=", "single": "·", "disagree": "!", "spread": "~"}
+    marks = {"agree": "=", "single": "·", "spread": "~", "disagree": "!"}
     print("\ncomparison:")
-    for row in compare.summarize(conn, ip):
-        mark = marks[row["verdict"]]
-        print(f"  [{mark}] {row['topic']}.{row['key']}  ({row['verdict']})")
-        for value, backers in row["values"].items():
-            print(f"       {_fmt(json.loads(value))}  <-  {', '.join(backers)}")
+    summaries = sorted(
+        aggregate.cell_summaries(conn, ip),
+        key=lambda summary: (summary.get("priority", 99999), summary["topic"], summary["key"]),
+    )
+    group = None
+    for summary in summaries:
+        if summary.get("group") != group:
+            group = summary.get("group")
+            title = labels.GROUP_LABELS.get(group, group or "Other")
+            print(f"\n  {title}:")
+        mark = marks[summary["verdict"]]
+        label = render.claim_name(summary["topic"], summary["key"])
+        print(f"  [{mark}] {label:<22} ({summary['verdict_label']})")
+        if summary.get("description"):
+            print(f"       {summary['description']}")
+        print(f"       {summary['explanation']}")
+        if summary["topic"] == "latency" and summary.get("headline"):
+            print(f"       {summary['headline']}")
+        for entry in summary["labels"]:
+            stars = " *" if any(source in summary["multi"] for source in entry["sources"]) else ""
+            print(f"       {entry['label']}{stars}  <-  {', '.join(entry['sources'])}")
 
 
 def show_fetch(conn, fetch_id: int) -> int:
@@ -310,24 +319,26 @@ def show_fetch(conn, fetch_id: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "path":
+        from paths import __main__ as paths_cli
+        return paths_cli.run_path(argv[1:])
     sources.load_env()
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", nargs="?", help="IP address to look up")
     parser.add_argument("--db", default=os.environ.get("ARANYA_DB") or _default_db(), help="SQLite file (default: %(default)s)")
-    parser.add_argument("--view", action="store_true", help="render the claim view for IP (no fetch)")
-    parser.add_argument("--normalize", action="store_true", help="compare canonical values (with --view/--report/--stats)")
     parser.add_argument("--entities", action="store_true", help="resolve the IP's ownership entity")
-    parser.add_argument("--report", action="store_true", help="cross-IP overview + agreement profile")
-    parser.add_argument("--stats", action="store_true", help="cross-IP analysis over the store")
+    parser.add_argument("--report", action="store_true", help="concise report: one IP = facts; many IPs = comparison (no fetch)")
     parser.add_argument("--export", metavar="FILE", help="write the JSON contract (no fetch)")
     parser.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     parser.add_argument("--ips", help="comma-separated IP filter for --export/--html, or IPs to fetch")
     parser.add_argument("--topics", help="comma-separated topic or topic.key filter")
     parser.add_argument("--dump", nargs="?", const="dumps", metavar="DIR", help="write raw per-source output under DIR/<timestamp>/<ip>/")
     parser.add_argument("--update-dbs", action="store_true", help="refresh the local MaxMind/DB-IP databases")
-    parser.add_argument("--clear", action="store_true", help="empty the whole database and exit")
+    parser.add_argument("--clear", nargs="?", const="", metavar="IP", help="empty the whole database (or just this IP) and exit")
     parser.add_argument("--clear-ip", metavar="IP", help="empty just this IP (comma-separated allowed) and exit")
-    parser.add_argument("--with-observations", action="store_true", help="embed raw observations in export")
+    parser.add_argument("--with-observations", action="store_true", help="embed observations in JSON export (HTML always embeds observations and raw fetches)")
     parser.add_argument("--show-fetch", type=int, metavar="ID", help="print a stored fetch body")
     parser.add_argument("-v", "--verbose", action="store_true", help="show per-source progress on stderr")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colour")
@@ -337,16 +348,29 @@ def main(argv: list[str] | None = None) -> int:
         return _update_dbs()
 
     if args.clear and (args.ip or args.ips):
-        parser.error("--clear empties the whole database; use --clear-ip <ip> for a single IP")
+        parser.error("--clear takes the IP as its argument; e.g. --clear 8.8.8.8")
 
     color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
     os.makedirs(os.path.dirname(os.path.abspath(args.db)), exist_ok=True)
     conn = store.open_store(args.db)
 
-    if args.clear:
-        totals = store.clear(conn)
-        conn.close()
-        print(f"cleared {totals['observations']} observations and {totals['fetches']} fetches (all)")
+    if args.clear is not None:
+        if args.clear:
+            targets = [part.strip() for part in args.clear.split(",") if part.strip()]
+            totals = {"observations": 0, "fetches": 0}
+            for target in targets:
+                counts = store.clear(conn, target)
+                totals["observations"] += counts["observations"]
+                totals["fetches"] += counts["fetches"]
+            conn.close()
+            print(
+                f"cleared {totals['observations']} observations and {totals['fetches']} fetches "
+                f"({', '.join(targets)})"
+            )
+        else:
+            totals = store.clear(conn)
+            conn.close()
+            print(f"cleared {totals['observations']} observations and {totals['fetches']} fetches (all)")
         return 0
 
     if args.clear_ip:
@@ -371,7 +395,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.export or args.html:
         ips = args.ips.split(",") if args.ips else ([args.ip] if args.ip else None)
         topics = set(args.topics.split(",")) if args.topics else None
-        obj = export.build(conn, ips=ips, topics=topics, with_observations=args.with_observations)
+        obj = export.build(
+            conn,
+            ips=ips,
+            topics=topics,
+            with_observations=args.with_observations or bool(args.html),
+        )
+        if not obj["ips"]:
+            target = ", ".join(ips) if ips else "the database"
+            print(f"no stored observations for {target}", file=sys.stderr)
+            if ips:
+                print(f"fetch first, e.g.: aranya {ips[0]}", file=sys.stderr)
+            conn.close()
+            return 1
+        missing = [ip for ip in (ips or []) if ip not in obj["ips"]]
+        if missing:
+            print(f"warning: no stored observations for {', '.join(missing)}", file=sys.stderr)
         if args.export:
             with open(args.export, "w", encoding="utf-8") as handle:
                 handle.write(export.to_json(obj))
@@ -384,15 +423,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.report:
-        ips = views.ips(conn)
-        print("\n".join(render.overview_view(conn, ips, color, normalize=args.normalize)))
-        print("\n".join(render.profile_view(conn, ips, color, normalize=args.normalize)))
-        conn.close()
-        return 0
-
-    if args.stats:
-        ips = [args.ip] if args.ip else None
-        print("\n".join(render.stats_view(conn, ips, color, normalize=args.normalize)))
+        if args.ip:
+            ips = [args.ip]
+        elif args.ips:
+            ips = [part.strip() for part in args.ips.split(",") if part.strip()]
+        else:
+            ips = views.ips(conn)
+        if not ips:
+            print("no stored observations", file=sys.stderr)
+            conn.close()
+            return 1
+        print("\n".join(render.report_view(conn, ips, color)))
         conn.close()
         return 0
 
@@ -400,13 +441,6 @@ def main(argv: list[str] | None = None) -> int:
         if not args.ip:
             parser.error("--entities needs an IP")
         print("\n".join(render.entities_view(conn, args.ip, color)))
-        conn.close()
-        return 0
-
-    if args.view:
-        if not args.ip:
-            parser.error("--view needs an IP")
-        print("\n".join(render.claim_view(conn, args.ip, color, normalized=args.normalize)))
         conn.close()
         return 0
 
@@ -426,7 +460,8 @@ def main(argv: list[str] | None = None) -> int:
         statuses, _ = run_all(conn, target, dump_dir=dump_dir, verbose=args.verbose)
 
         print(f"aranya {target}\n")
-        print("sources:")
+        print("\n".join(render.summary_view(conn, target, color)))
+        print("\nsources:")
         for source_id, status in statuses.items():
             print(f"  {status:<12} {source_id}")
 

@@ -139,15 +139,19 @@ def peeringdb_netixlan(body: str) -> dict:
 def peeringdb_fac(body: str) -> dict:
     payload = _obj(body)
     data = payload.get("data") or []
-    first = data[0] if isinstance(data, list) and data else {}
-    return {
-        "fac_id": first.get("id"),
-        "name": first.get("name"),
-        "city": first.get("city"),
-        "country": first.get("country"),
-        "latitude": first.get("latitude"),
-        "longitude": first.get("longitude"),
-    }
+    facilities = [
+        {
+            "fac_id": item.get("id"),
+            "name": item.get("name"),
+            "city": item.get("city"),
+            "country": item.get("country"),
+            "latitude": item.get("latitude"),
+            "longitude": item.get("longitude"),
+        }
+        for item in data
+        if isinstance(item, dict)
+    ]
+    return {"facilities": facilities}
 
 
 def peeringdb_ixpfx(body: str) -> dict:
@@ -260,6 +264,71 @@ def ipguide(body: str) -> dict:
     }
 
 
+def bgp_tools(body: str) -> dict:
+    lines = [line for line in body.splitlines() if "|" in line]
+    if len(lines) < 2:
+        return {}
+    fields = [field.strip() for field in lines[1].split("|")]
+    if len(fields) < 7:
+        return {}
+    return {
+        "asn": fields[0] or None,
+        "prefix": fields[2] or None,
+        "country": fields[3] or None,
+        "registry": fields[4] or None,
+        "allocated": fields[5] or None,
+        "name": fields[6] or None,
+    }
+
+
+def bgproutes(body: str) -> dict:
+    payload = _obj(body)
+    vp_payload = ((payload.get("vantage_points") or {}).get("data") or {})
+    vps = {
+        str(item.get("id")): item
+        for item in (vp_payload.get("bgp") or [])
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+    rib = ((payload.get("rib") or {}).get("data") or {})
+    routes: list[dict] = []
+    for vp_id, entries in (rib.get("bgp") or {}).items():
+        if not isinstance(entries, dict):
+            continue
+        vp = vps.get(str(vp_id), {})
+        for prefix, values in entries.items():
+            as_path = values[0] if isinstance(values, list) and values else None
+            aspa_status = values[2] if isinstance(values, list) and len(values) > 2 else None
+            rov_status = values[3] if isinstance(values, list) and len(values) > 3 else None
+            label = (
+                vp.get("org_name")
+                or vp.get("ixp_name")
+                or vp.get("country")
+                or f"VP {vp_id}"
+            )
+            if vp.get("asn") is not None:
+                label = f"{label} AS{vp['asn']}"
+            routes.append(
+                {
+                    "collector": "bgproutes.io",
+                    "vp_id": vp_id,
+                    "vp_label": label,
+                    "vp_ip": vp.get("ip"),
+                    "vp_asn": vp.get("asn"),
+                    "vp_country": vp.get("country"),
+                    "vp_source": vp.get("source"),
+                    "ixp_name": vp.get("ixp_name"),
+                    "ixp_id": vp.get("ixp_id"),
+                    "org_name": vp.get("org_name"),
+                    "org_country": vp.get("org_country"),
+                    "prefix": prefix,
+                    "as_path": as_path,
+                    "aspa_status": aspa_status,
+                    "rov_status": rov_status,
+                }
+            )
+    return {"routes": routes}
+
+
 def routeviews_prefix(body: str) -> dict:
     routes: list[dict] = []
     for item in _list(body):
@@ -291,51 +360,8 @@ def routeviews_prefix(body: str) -> dict:
     return {"routes": routes}
 
 
-def routeviews_announcements(body: str) -> dict:
-    routes: list[dict] = []
-    for item in _list(body):
-        if not isinstance(item, dict):
-            continue
-        announcements = []
-        for peer in item.get("reporting_peers") or []:
-            if not isinstance(peer, dict):
-                continue
-            announcements.append(
-                {
-                    "peer_asn": peer.get("peer_asn"),
-                    "peer_addr": peer.get("peer_addr"),
-                    "collector": peer.get("collector"),
-                    "as_path": peer.get("as_path"),
-                    "timestamp": peer.get("timestamp"),
-                }
-            )
-        routes.append(
-            {
-                "prefix": item.get("prefix"),
-                "origin_asn": item.get("origin_asn"),
-                "rpki_state": item.get("rpki_state"),
-                "announcements": announcements,
-            }
-        )
-    return {"routes": routes}
-
-
 def routeviews_asn(body: str) -> dict:
     return {"prefixes": [item for item in _list(body) if isinstance(item, str)]}
-
-
-def routeviews_collector(body: str) -> dict:
-    payload = _obj(body)
-    results = payload.get("results") or []
-    first = results[0] if isinstance(results, list) and results else {}
-    return {
-        "name": first.get("name"),
-        "ipv4": first.get("ipv4"),
-        "ipv6": first.get("ipv6"),
-        "lat": _float(first.get("lat")),
-        "lng": _float(first.get("lng")),
-        "country": first.get("country"),
-    }
 
 
 def atlas_ping(body: str) -> dict:

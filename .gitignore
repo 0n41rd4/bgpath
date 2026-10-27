@@ -12,3 +12,4 @@ venv/
 scripts/.geoip.env
 scripts/.aranya.env
 dumps/
+/*.html

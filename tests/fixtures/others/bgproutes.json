@@ -1,0 +1,18 @@
+{
+  "vantage_points": {
+    "data": {
+      "bgp": [
+        {"id": 1, "ip": "192.0.2.1", "asn": 64500, "country": "NL", "ixp_name": "AMS-IX", "status": ["ready"]}
+      ]
+    }
+  },
+  "rib": {
+    "data": {
+      "bgp": {
+        "1": {
+          "8.8.8.0/24": ["2119 15169", "", null, "V", 1]
+        }
+      }
+    }
+  }
+}

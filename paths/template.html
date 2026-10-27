@@ -2,376 +2,308 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aranya · scan graph</title>
+<title>aranya paths</title>
 <style>
-  :root { --bg:#0b1020; --panel:#141a2e; --ink:#e6ebf5; --muted:#8b96b0; --line:#26304a; }
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --blue:#2563eb; --gray:#9ca3af; --green:#16a34a; --red:#dc2626; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
-  header h1 { font-size:14px; margin:0; }
-  header .meta { color:var(--muted); }
-  .hint { color:var(--muted); }
-  .warn { color:#f87171; }
-  #wrap { display:flex; height:calc(100vh - 52px); }
-  #canvas { flex:1; overflow:hidden; position:relative; cursor:grab; }
-  #canvas.grabbing { cursor:grabbing; }
-  svg { display:block; }
-  .hop rect { stroke:#0b1020; stroke-width:1.5; rx:5; }
-  .hop text { fill:#fff; font-size:11px; pointer-events:none; }
-  .edge { fill:none; }
-  .asbox { fill:#16a34a14; stroke:#16a34a88; stroke-width:1; }
-  .machinebox { fill:none; stroke:#7c3aed; stroke-width:1.5; stroke-dasharray:5 4; }
-  .boxtitle { fill:#cbd5e1; font-size:11px; }
-  .rowlabel { fill:#8b96b0; font-size:12px; }
-  .boxsub { fill:#86efac; font-size:10px; }
-  .ixchip rect { fill:#0ea5e9; stroke:#0b1020; stroke-width:1; rx:8; }
-  .ixchip text { fill:#fff; font-size:10px; pointer-events:none; }
-  .ixchip { cursor:pointer; }
-  .hop .ixdot { fill:#0ea5e9; stroke:#0b1020; stroke-width:1; }
-  #panel { width:380px; border-left:1px solid var(--line); background:var(--panel); padding:14px; overflow:auto; }
-  #panel h2 { font-size:12px; margin:14px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
-  #panel h2:first-child { margin-top:0; }
-  #panel .kv { margin:0 0 4px; word-break:break-word; }
-  #panel .k { color:var(--muted); }
-  #panel a { color:#7dd3fc; }
-  #panel table { border-collapse:collapse; width:100%; }
-  #panel td { padding:2px 0; vertical-align:top; }
-  #panel td.k { width:96px; color:var(--muted); }
-  #panel .item { border-bottom:1px solid var(--line); padding:6px 0; }
-  #tooltip { position:fixed; pointer-events:none; background:#000c; border:1px solid var(--line);
-             padding:4px 7px; border-radius:4px; font-size:11px; display:none; z-index:5; }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); margin: 0; background:#f8fafc; }
+  header { padding: 18px 24px; background:#0f172a; color:#fff; }
+  header h1 { margin:0; font-size:18px; }
+  header p { margin:4px 0 0; color:#cbd5e1; }
+  main { display:flex; align-items:flex-start; }
+  #graphs { flex:1 1 auto; padding: 16px; min-width:0; overflow-x:auto; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; margin-bottom:16px; padding:12px; }
+  .card h2 { margin:0 0 4px; font-size:15px; }
+  .method { appearance:none; border:0; background:none; padding:0; margin:0; font:inherit; color:inherit; text-align:left; cursor:pointer; }
+  .method:hover { color:var(--blue); text-decoration:underline; }
+  .method:focus-visible { outline:2px solid var(--blue); outline-offset:2px; border-radius:3px; }
+  .meta { color:var(--muted); font-size:12.5px; margin-bottom:8px; }
+  .card svg { display:block; width:100%; height:auto; margin:0 auto; }
+  .ok { color:var(--green); font-weight:600; }
+  .bad { color:var(--red); font-weight:600; }
+  svg text { font-family: inherit; }
+  .node { cursor:pointer; outline:none; }
+  .node rect { fill:#fff; stroke:var(--gray); stroke-width:1.4; rx:6; transition:fill .14s, stroke .14s; }
+  .node:hover rect, .node:focus-visible rect, .node.selected rect { stroke:var(--blue); stroke-width:2; fill:#eff6ff; }
+  .node.target rect { stroke:var(--green); stroke-width:2.2; fill:#f0fdf4; }
+  .node.target:hover rect, .node.target:focus-visible rect, .node.target.selected rect { stroke:var(--green); fill:#dcfce7; }
+  .node text.ip { font-family: ui-monospace, monospace; font-size:11.5px; fill:var(--ink); pointer-events:none; }
+  .node text.as { font-size:10px; fill:var(--muted); pointer-events:none; }
+  .edge { cursor:pointer; }
+  .edge .hit { stroke:transparent; stroke-width:12; fill:none; }
+  .edge .line { stroke-width:2; fill:none; transition:stroke-width .14s; }
+  .edge:hover .line { stroke-width:3; }
+  .edge.gap .line { stroke:var(--gray); stroke-dasharray:5 5; }
+  .edge.same .line { stroke:var(--gray); }
+  .edge.cross .line { stroke:var(--blue); }
+  .edge.peering .line { stroke:var(--green); stroke-width:2.5; }
+  .chip circle { fill:var(--blue); stroke:#fff; stroke-width:1.5; }
+  .chip text { fill:#fff; font-size:10px; text-anchor:middle; }
+  #panel { width:340px; flex:0 0 340px; padding:16px; position:sticky; top:0; height:100vh; overflow:auto; border-left:1px solid var(--line); background:#fff; }
+  #panel h3 { margin:0 0 8px; font-size:14px; }
+  #panel dl { margin:0; }
+  #panel dt { font-weight:600; font-size:12px; color:var(--muted); margin-top:8px; }
+  #panel dd { margin:2px 0 0; font-size:13px; }
+  #panel ul { margin:4px 0 0; padding-left:16px; }
+  #panel .empty { color:var(--muted); }
+  #panel .log { margin:8px 0 0; padding:10px; background:#0f172a; color:#e2e8f0; border-radius:8px; font:11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+  #panel .log-meta { color:var(--muted); font-size:12px; margin:4px 0 0; }
+  #panel .missing { margin:8px 0 0; padding:8px 10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; color:#9a3412; font-size:12px; }
+  #panel .missing ul { margin:4px 0 0; padding-left:16px; }
+  @media (max-width: 900px) {
+    main { display:block; }
+    #panel { width:auto; height:auto; position:static; border-left:0; border-top:1px solid var(--line); }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>aranya · scan graph</h1>
-  <span class="meta" id="runmeta"></span>
-  <span class="meta warn" id="warn"></span>
-  <span class="meta hint">edges = packet traversal · boxes = AS / same-machine containment · dashed hop = weaker ttl · click a hop, edge, handoff chip or AS box for detail &amp; source</span>
-</header>
-<div id="wrap">
-  <div id="canvas"><svg id="svg"><g id="viewport"></g></svg></div>
-  <aside id="panel"></aside>
-</div>
-<div id="tooltip"></div>
+<header><h1>aranya · paths</h1><p>one graph per traceroute tool · click a method name for its stored hop log · click or focus a hop for details · click a link for its handoff</p></header>
+<main>
+  <div id="graphs"></div>
+  <div id="panel"><h3>selection</h3><div class="empty">click a method name for its log, a hop for details, or a link for its handoff</div></div>
+</main>
 <script>
 const DATA = /*__PATHS_DATA__*/;
-const GRAPHS = DATA.graphs || [DATA];
-const NS = "http://www.w3.org/2000/svg";
-const W = 150, H = 30;
-const AS_PALETTE = ["#16a34a","#0ea5e9","#a855f7","#f59e0b","#ef4444","#14b8a6","#84cc16","#e879f9"];
-const svg = document.getElementById("svg");
-const viewport = document.getElementById("viewport");
-const tooltip = document.getElementById("tooltip");
-const panel = document.getElementById("panel");
-const canvas = document.getElementById("canvas");
-let scale = 1, tx = 0, ty = 0;
+const NW = 150, NH = 34;
 
-function el(name, attrs) { const n = document.createElementNS(NS, name); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
-function colorFor(asn) { let s = 0; for (const c of (asn||"")) s = (s*31 + c.charCodeAt(0))>>>0; return AS_PALETTE[s % AS_PALETTE.length]; }
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
-function graphBounds(g) {
-  let mx = 0, my = 0;
-  for (const h of g.hops) { mx = Math.max(mx, h.x + W); my = Math.max(my, h.y + H); }
-  for (const c of g.containers) { mx = Math.max(mx, c.x + c.w); my = Math.max(my, c.y + c.h); }
-  return {mx: mx, my: my};
-}
-function layoutRows() {
-  let y = 0;
-  for (const g of GRAPHS) {
-    const b = graphBounds(g);
-    g._rowY = y;
-    g._byId = {}; g.hops.forEach(h => g._byId[h.id] = h);
-    y += b.my + 74;
-  }
-  return y;
+function pingText(p){
+  if (!p) return "ping: n/a";
+  if (p.reachable) return `ping: ok (avg ${p.rtt_avg_ms ?? "?"} ms)`;
+  return `ping: unreachable (loss ${p.loss_percent ?? "?"}%)`;
 }
 
-function drawGraph(g, row) {
-  for (const c of g.containers) {
-    const cg = el("g", {class:"container"});
-    if (c.kind === "as") {
-      const pts = (c.hull || []).map(p => p.join(",")).join(" ");
-      if (c.hull && c.hull.length >= 3) {
-        cg.appendChild(el("polygon", {class:"asbox", points:pts, stroke:colorFor(c.label)}));
-      } else {
-        cg.appendChild(el("rect", {class:"asbox", x:c.x, y:c.y, width:c.w, height:c.h, rx:10, stroke:colorFor(c.label)}));
+function reachText(r){
+  if (r.reached) return "reached the target";
+  return `not reached — last hop ${r.last_hop ?? "?"} ${r.error ?? ""}`;
+}
+
+function renderGraph(g){
+  const card = document.createElement("div");
+  card.className = "card";
+  const maxX = g.hops.reduce((m,h)=>Math.max(m,h.x), 0) + NW;
+  const maxY = g.hops.reduce((m,h)=>Math.max(m,h.y), 0) + NH;
+  const gw = maxX + 40, gh = maxY + 40;
+
+  const title = document.createElement("h2");
+  const method = document.createElement("button");
+  method.type = "button";
+  method.className = "method";
+  method.textContent = g.label;
+  method.title = "Show the stored semi-raw hop log";
+  method.addEventListener("click", () => showLog(g));
+  title.appendChild(method);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.innerHTML = `<span class="${g.reachability.reached ? "ok" : "bad"}">${esc(reachText(g.reachability))}</span> · ` +
+    `<span class="${g.ping && g.ping.reachable ? "ok" : "bad"}">${esc(pingText(g.ping))}</span> · ` +
+    `${esc(g.hops.length)} hops · ${esc(g.edges.length)} links`;
+  card.appendChild(title); card.appendChild(meta);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${gw} ${gh}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
+  svg.style.maxWidth = `${gw}px`;
+
+  for (const e of g.edges){
+    const s = g.hops.find(h=>h.id===e.source), t = g.hops.find(h=>h.id===e.target);
+    if (!s || !t) continue;
+    const x1 = s.x + NW/2, y1 = s.y + NH, x2 = t.x + NW/2, y2 = t.y;
+    const cross = e.from_as && e.to_as && e.from_as !== e.to_as;
+    const cls = "edge " + (e.peering ? "peering " : "") + (e.gap ? "gap" : (cross ? "cross" : "same"));
+    const g2 = document.createElementNS("http://www.w3.org/2000/svg","g");
+    g2.setAttribute("class", cls);
+    const hit = document.createElementNS("http://www.w3.org/2000/svg","line");
+    hit.setAttribute("class","hit"); hit.setAttribute("x1",x1); hit.setAttribute("y1",y1); hit.setAttribute("x2",x2); hit.setAttribute("y2",y2);
+    const line = document.createElementNS("http://www.w3.org/2000/svg","line");
+    line.setAttribute("class","line"); line.setAttribute("x1",x1); line.setAttribute("y1",y1); line.setAttribute("x2",x2); line.setAttribute("y2",y2);
+    g2.addEventListener("click", ()=>showEdge(e));
+    g2.appendChild(hit); g2.appendChild(line);
+
+    if (e.handoff){
+      const h = e.handoff;
+      const n = (h.facilities||[]).length + (h.ixps||[]).length + (h.announces_dest != null ? 1 : 0);
+      if (n > 0){
+        const mx = (x1+x2)/2, my = (y1+y2)/2;
+        const chip = document.createElementNS("http://www.w3.org/2000/svg","g");
+        chip.setAttribute("class","chip");
+        chip.setAttribute("transform",`translate(${mx},${my})`);
+        const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
+        c.setAttribute("r", 9);
+        const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+        t.setAttribute("y", 3.5); t.textContent = n > 9 ? "·" : n;
+        chip.appendChild(c); chip.appendChild(t);
+        g2.appendChild(chip);
       }
-      const t = el("text", {class:"boxtitle", x:c.lx != null ? c.lx : c.x+8, y:c.ly != null ? c.ly : c.y+14});
-      const asName = c.info.name ? (c.info.name.length > 20 ? c.info.name.slice(0, 19) + "…" : c.info.name) : "";
-      t.textContent = c.label + (asName ? "  " + asName : "");
-      cg.appendChild(t);
-      const viaIx = c.info.ixps && c.info.ixps.length;
-      if (viaIx) {
-        const names = c.info.ixps.map(x => x.name).slice(0, 2);
-        const more = c.info.ixps.length - names.length;
-        const s = el("text", {class:"boxsub", x:c.lx != null ? c.lx : c.x+8, y:(c.ly != null ? c.ly : c.y+14)+12});
-        s.textContent = "via " + names.join(", ") + (more > 0 ? ` +${more}` : "");
-        cg.appendChild(s);
-      } else if (c.info.facilities && c.info.facilities.length) {
-        const n = c.info.facilities.length;
-        const first = c.info.facilities[0].name;
-        const short = first.length > 20 ? first.slice(0, 19) + "…" : first;
-        const s = el("text", {class:"boxsub", x:c.lx != null ? c.lx : c.x+8, y:(c.ly != null ? c.ly : c.y+14)+12});
-        s.textContent = "near " + short + (n > 1 ? ` +${n-1}` : "");
-        cg.appendChild(s);
+    }
+    svg.appendChild(g2);
+  }
+
+  for (const hop of g.hops){
+    const g2 = document.createElementNS("http://www.w3.org/2000/svg","g");
+    g2.setAttribute("class","node" + (hop.is_target ? " target":""));
+    g2.setAttribute("transform",`translate(${hop.x},${hop.y})`);
+    g2.setAttribute("tabindex","0");
+    g2.setAttribute("focusable","true");
+    g2.setAttribute("role","button");
+    g2.setAttribute("aria-label",`${hop.id}${hop.as_name ? ", "+hop.as_name : ""}`);
+    const tip = document.createElementNS("http://www.w3.org/2000/svg","title");
+    tip.textContent = "Click for hop details";
+    const rect = document.createElementNS("http://www.w3.org/2000/svg","rect");
+    rect.setAttribute("width",NW); rect.setAttribute("height",NH);
+    const t1 = document.createElementNS("http://www.w3.org/2000/svg","text");
+    t1.setAttribute("class","ip"); t1.setAttribute("x",8); t1.setAttribute("y",14);
+    t1.textContent = hop.id;
+    const t2 = document.createElementNS("http://www.w3.org/2000/svg","text");
+    t2.setAttribute("class","as"); t2.setAttribute("x",8); t2.setAttribute("y",28);
+    t2.textContent = hop.as_name || (hop.asn ? "AS"+hop.asn : "");
+    g2.appendChild(tip); g2.appendChild(rect); g2.appendChild(t1); g2.appendChild(t2);
+    const select = () => {
+      svg.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
+      g2.classList.add("selected");
+      showNode(hop);
+    };
+    g2.addEventListener("click", select);
+    g2.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        select();
       }
-      const hasHandoff = (c.info.ixps && c.info.ixps.length) || (c.info.facilities && c.info.facilities.length);
-      cg.addEventListener("mousemove", ev => tip(ev, "AS container · " + c.label + (hasHandoff ? " · suspected handoff" : "")));
-      cg.addEventListener("click", ev => { ev.stopPropagation(); showAs(c); });
-    } else {
-      const pts = (c.hull || []).map(p => p.join(",")).join(" ");
-      if (c.hull && c.hull.length >= 3) {
-        cg.appendChild(el("polygon", {class:"machinebox", points:pts}));
-      } else {
-        cg.appendChild(el("rect", {class:"machinebox", x:c.x, y:c.y, width:c.w, height:c.h, rx:8}));
-      }
-      cg.addEventListener("mousemove", ev => tip(ev, "same machine"));
+    });
+    svg.appendChild(g2);
+  }
+  card.appendChild(svg);
+  return card;
+}
+
+function showLog(g){
+  document.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
+  const p = document.getElementById("panel");
+  const run = g.run || {};
+  const meta = run.meta || {};
+  const raw = g.raw || [];
+  const bits = [];
+  if (run.vantage) bits.push("vantage " + run.vantage);
+  if (meta.protocols && meta.protocols.length) bits.push("protocols " + meta.protocols.join(","));
+  if (meta.flows) bits.push("flows " + meta.flows);
+  if (meta.max_ttl) bits.push("max-ttl " + meta.max_ttl);
+  if (meta.retry_ttl) bits.push("retry-ttl " + meta.retry_ttl);
+  if (run.started_at) bits.push(run.started_at);
+  const lines = raw.map(h => {
+    const flow = h.flow_id == null ? "?" : h.flow_id;
+    const ttl = h.ttl == null ? "?" : String(h.ttl).padStart(2, " ");
+    const ip = h.src_ip || "*";
+    const parts = [`f${flow} ttl ${ttl}  ${ip.padEnd(16)}`];
+    parts.push(h.rtt_ms == null ? "no reply" : Number(h.rtt_ms).toFixed(3) + " ms");
+    if (h.icmp_type != null) parts.push(`icmp ${h.icmp_type}/${h.icmp_code ?? "?"}`);
+    if (h.reply_ttl != null) parts.push(`reply-ttl ${h.reply_ttl}`);
+    if (h.name) parts.push(h.name);
+    if (h.mpls && h.mpls.length) parts.push("mpls " + JSON.stringify(h.mpls));
+    if (h.is_last) parts.push("[last]");
+    return parts.join("  ");
+  });
+  p.innerHTML = `<h3>${esc(run.tool || "?")} · ${esc(run.target || "?")}</h3>` +
+    `<div class="log-meta">stored semi-raw hop log · ${esc(raw.length)} rows${bits.length ? " · " + esc(bits.join(" · ")) : ""}</div>` +
+    (lines.length ? `<pre class="log">${esc(lines.join("\n"))}</pre>` : `<p class="empty">no hops stored</p>`);
+}
+
+function showNode(h){
+  document.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
+  const p = document.getElementById("panel");
+  const rows = [];
+  const missing = [];
+  const found = (label, value) => {
+    if (value == null || value === "") { missing.push(label); return; }
+    rows.push(`<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`);
+  };
+  found("TTL", h.ttl);
+  found("RTT", h.rtt_ms == null ? null : Number(h.rtt_ms).toFixed(3) + " ms");
+  const as = h.as_name ? (h.asn ? h.as_name+" (AS"+h.asn+")" : h.as_name) : (h.asn ? "AS"+h.asn : null);
+  found("AS", as);
+  found("prefix", h.prefix);
+  found("hostname", h.hostname);
+  found("country", h.country);
+  found("city", h.city);
+  found("IXP", h.ixp);
+  if (h.bgp_asn != null){
+    const agree = h.asn != null && String(h.bgp_asn) === String(h.asn);
+    rows.push(`<dt>bgp.tools</dt><dd>AS${esc(h.bgp_asn)}${h.bgp_prefix ? " · " + esc(h.bgp_prefix) : ""}${h.bgp_country ? " · " + esc(h.bgp_country) : ""}${agree ? " · agrees" : " · differs"}</dd>`);
+  }
+  if (h.latitude != null && h.longitude != null){
+    found("coordinates", Number(h.latitude).toFixed(4) + ", " + Number(h.longitude).toFixed(4));
+  }
+  if (h.is_target) rows.push(`<dt>target</dt><dd>yes</dd>`);
+  const missingHtml = missing.length
+    ? `<div class="missing">not found: ${esc(missing.join(" · "))}</div>` : "";
+  p.innerHTML = `<h3>${esc(h.id)}</h3><dl>` + rows.join("") + `</dl>` + missingHtml;
+}
+
+function showEdge(e){
+  document.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
+  const p = document.getElementById("panel");
+  const h = e.handoff || {};
+  const rows = [];
+  const missing = [];
+  const title = h.confirmed ? "confirmed peering" : "inter-AS link";
+  rows.push(`<dt>link</dt><dd>${esc(e.from_as ? "AS"+e.from_as : "?")} → ${esc(e.to_as ? "AS"+e.to_as : "?")}</dd>`);
+
+  const geo = h.geo || {};
+  if (geo.src_country || geo.dst_country){
+    const dist = geo.distance_km != null ? ` · ${esc(geo.distance_km)} km` : "";
+    rows.push(`<dt>geography</dt><dd>${esc(geo.src_country || "?")} → ${esc(geo.dst_country || "?")}${dist} ${geo.match ? "(match)" : "(mismatch)"}</dd>`);
+  } else {
+    missing.push("geography");
+  }
+
+  if (h.adjacency && h.adjacency.length){
+    rows.push(`<dt>observed adjacency</dt><dd><ul>` +
+      h.adjacency.map(a=>`<li>${esc(a.source)}${a.vp_label ? " · " + esc(a.vp_label) : ""} · <code>${esc(a.as_path)}</code></li>`).join("") +
+      `</ul></dd>`);
+  } else {
+    missing.push("AS-path adjacency");
+  }
+  const ris = h.ris || {};
+  if (h.neighbours){
+    const bits = [];
+    if (ris.type) bits.push(ris.type);
+    if (ris.power != null) bits.push("power " + ris.power);
+    if (ris.v4_peers != null) bits.push(ris.v4_peers + " v4 peers");
+    if (ris.v6_peers != null) bits.push(ris.v6_peers + " v6 peers");
+    rows.push(`<dt>RIS neighbour</dt><dd>yes${bits.length ? " · " + esc(bits.join(" · ")) : ""}</dd>`);
+  } else {
+    rows.push(`<dt>RIS neighbour</dt><dd>no</dd>`);
+    missing.push("RIS neighbour pair");
+  }
+  if (h.ixp && (h.ixp.src || h.ixp.dst)){
+    rows.push(`<dt>IXP</dt><dd>${esc(h.ixp.src || "?")} → ${esc(h.ixp.dst || "?")}</dd>`);
+    if (h.ixp.src && h.ixp.src === h.ixp.dst){
+      rows.push(`<dt>shared IXP (IP-level)</dt><dd>${esc(h.ixp.src)}</dd>`);
     }
-    cg.addEventListener("mouseleave", hideTip);
-    row.appendChild(cg);
+  } else {
+    missing.push("IXP membership");
   }
-  for (const e of g.edges) {
-    const a = g._byId[e.source], b = g._byId[e.target];
-    if (!a || !b) continue;
-    const ax = a.x + W, ay = a.y + H/2, bx = b.x, by = b.y + H/2, mid = (ax+bx)/2;
-    const d = Math.abs(a.x-b.x) < 1
-      ? `M${ax},${ay} C${ax+26},${ay} ${bx+W+26},${by} ${bx+W},${by}`
-      : `M${ax},${ay} C${mid},${ay} ${mid},${by} ${bx},${by}`;
-    const eg = el("g");
-    const hand = e.handoff || {ixps:[], facilities:[]};
-    eg.appendChild(el("path", {class:"edge", d, stroke: (hand.ixps.length || hand.facilities.length) ? "#f59e0b" : "#60a5fa",
-                               "stroke-width": 1.5 + Math.min(e.count,4),
-                               "stroke-dasharray": e.gap ? "6 5" : "none", opacity:0.9}));
-    eg.appendChild(el("path", {class:"edge", d, stroke:"transparent", "stroke-width":14}));
-    const handoffTip = hand.ixps.length ? " · suspected IXP " + hand.ixps.map(x=>x.name).join(", ")
-      : (hand.facilities.length ? " · suspected facility " + hand.facilities.map(f=>f.name).join(", ") : "");
-    eg.addEventListener("mousemove", ev => tip(ev, `hop → hop · ttl ${e.ttl}${e.gap ? " · gap" : ""}${e.min_rtt_ms!=null ? " · "+e.min_rtt_ms.toFixed(1)+"ms" : ""}${(e.protocols&&e.protocols.length) ? " · "+e.protocols.join("/") : ""}${handoffTip}`));
-    eg.addEventListener("mouseleave", hideTip);
-    eg.addEventListener("click", ev => { ev.stopPropagation(); showEdge(e); });
-    row.appendChild(eg);
-    if (hand.ixps.length || hand.facilities.length) {
-      const isIx = hand.ixps.length > 0;
-      const list = isIx ? hand.ixps : hand.facilities;
-      const label = isIx ? ("IX " + list[0].name + (list.length > 1 ? ` +${list.length-1}` : "")) : ("FAC ×" + list.length);
-      const cx = Math.abs(a.x-b.x) < 1 ? Math.max(ax,bx)+40 : (ax+bx)/2;
-      const cy = (a.y + b.y)/2 + H/2 - 16;
-      const cg = el("g", {class:"ixchip"});
-      const w = 12 + label.length * 6;
-      cg.appendChild(el("rect", {x:cx-w/2, y:cy-9, width:w, height:16, fill: isIx ? "#0ea5e9" : "#b45309"}));
-      const ct = el("text", {x:cx, y:cy+3, "text-anchor":"middle"}); ct.textContent = label; cg.appendChild(ct);
-      cg.addEventListener("mousemove", ev => tip(ev, "suspected handoff · " + list.map(x=>x.name).join(", ")));
-      cg.addEventListener("mouseleave", hideTip);
-      cg.addEventListener("click", ev => { ev.stopPropagation(); showEdge(e); });
-      row.appendChild(cg);
-    }
+
+  if (h.facilities && h.facilities.length){
+    rows.push(`<dt>shared facilities</dt><dd><ul>` + h.facilities.map(f=>`<li>${esc(f.name)}${f.city ? " · "+esc(f.city) : ""}</li>`).join("") + `</ul></dd>`);
+  } else {
+    missing.push("shared facilities");
   }
-  for (const h of g.hops) {
-    const hg = el("g", {class:"hop", transform:`translate(${h.x},${h.y})`});
-    const rect = el("rect", {width:W, height:H, fill:h.is_target ? "#f59e0b" : (h.as ? colorFor(h.as) : "#475569")});
-    if (h.ttl_confidence && h.ttl_confidence !== "high") {
-      rect.setAttribute("stroke", h.ttl_confidence === "low" ? "#ef4444" : "#f59e0b");
-      rect.setAttribute("stroke-dasharray", h.ttl_confidence === "low" ? "3 2" : "5 3");
-      rect.setAttribute("stroke-width", "2");
-    }
-    if (h.long_haul) { rect.setAttribute("stroke", "#f8fafc"); rect.setAttribute("stroke-width", "2.5"); rect.removeAttribute("stroke-dasharray"); }
-    hg.appendChild(rect);
-    const t = el("text", {x:8, y:19});
-    t.textContent = (h.ttl!=null ? h.ttl+"  " : "") + h.id;
-    hg.appendChild(t);
-    if (h.ix) hg.appendChild(el("circle", {class:"ixdot", cx:W-8, cy:8, r:4}));
-    const hopTip = "hop · " + h.id + (h.as ? " · " + h.as : "") + (h.ix ? " · IXP " + h.ix.name : "")
-      + (h.ttl_confidence && h.ttl_confidence !== "high" ? " · ttl " + h.ttl_confidence : "");
-    hg.addEventListener("mousemove", ev => tip(ev, hopTip));
-    hg.addEventListener("mouseleave", hideTip);
-    hg.addEventListener("click", ev => { ev.stopPropagation(); showHop(h); });
-    row.appendChild(hg);
+  if (h.ixps && h.ixps.length){
+    rows.push(`<dt>shared IXPs</dt><dd><ul>` + h.ixps.map(x=>`<li>${esc(x.name)}</li>`).join("") + `</ul></dd>`);
+  } else {
+    missing.push("shared IXPs");
   }
+  rows.push(`<dt>outgoing AS advertises destination</dt><dd>${h.announces_dest == null ? "unknown" : (h.announces_dest ? "yes" : "no")}</dd>`);
+  if (h.announces_dest == null) missing.push("advertisement");
+
+  const missingHtml = missing.length
+    ? `<div class="missing">not found: ${esc(missing.join(" · "))}</div>` : "";
+  p.innerHTML = `<h3>${esc(title)}</h3><dl>` + rows.join("") + `</dl>` + missingHtml;
 }
 
-function draw() {
-  viewport.textContent = "";
-  for (const g of GRAPHS) {
-    const row = el("g", {class:"row", transform:`translate(0,${g._rowY})`});
-    drawGraph(g, row);
-    viewport.appendChild(row);
-    const lab = el("text", {class:"rowlabel", x:14, y:g._rowY - 18});
-    const reach = (g.reachability && !g.reachability.reached)
-      ? "   ·   TARGET NOT REACHED" + (g.reachability.error ? " (" + g.reachability.error + ")" : "")
-      : "";
-    lab.textContent = (g.label || "?") + "   ·   vantage " + (g.vantage || "?") + "   ·   " + (g.started_at || "?")
-      + "   ·   " + g.hops.length + " hops · " + g.edges.length + " edges" + reach;
-    viewport.appendChild(lab);
-  }
-  if (DATA.vantage_mismatch) {
-    const w = document.getElementById("warn");
-    w.textContent = "⚠ rows captured from different vantages (" + (DATA.vantages || []).join(", ") + ") — not directly comparable";
-  }
-}
-
-function tip(ev, text) { tooltip.textContent = text; tooltip.style.display="block";
-  tooltip.style.left=(ev.clientX+12)+"px"; tooltip.style.top=(ev.clientY+12)+"px"; }
-function hideTip() { tooltip.style.display="none"; }
-
-function title(t) { const h=document.createElement("h2"); h.textContent=t; return h; }
-function rows(entries) { const tb=document.createElement("table");
-  for (const [k,v] of entries) { if (v==null||v==="") continue;
-    const tr=document.createElement("tr"); const kd=document.createElement("td"); kd.className="k"; kd.textContent=k;
-    const vd=document.createElement("td"); vd.textContent=String(v); tr.append(kd,vd); tb.appendChild(tr); } return tb; }
-function link(url) { if(!url) return null; const a=document.createElement("a"); a.href=url; a.target="_blank";
-  a.rel="noopener noreferrer"; a.textContent="source ↗"; return a; }
-function item(text, url) { const d=document.createElement("div"); d.className="item"; d.textContent=text;
-  const a=link(url); if(a){ d.appendChild(document.createElement("br")); d.appendChild(a);} return d; }
-
-function showHop(h) {
-  panel.textContent = "";
-  panel.appendChild(title("HOP"));
-  panel.appendChild(rows([["ip", h.id], ["ttl", h.ttl], ["as", h.as], ["as name", h.as_name],
-                          ["protocols", (h.protocols||[]).join(", ")], ["tools", (h.tools||[]).join(", ")],
-                          ["aliased asns", (h.aliased_asns||[]).join(", ")], ["machine", h.machine],
-                          ["location", h.geo ? [h.geo.city, h.geo.country].filter(Boolean).join(", ") + "  (" + h.geo.source + ")" : null],
-                          ["rtt_ms", h.rtt_ms], ["rtt bound", h.rtt_km_upper!=null ? "≤ " + Math.round(h.rtt_km_upper) + " km" : null],
-                          ["long haul", h.long_haul ? "yes · largest rtt" : null],
-                          ["at IXP", h.ix ? h.ix.name : null],
-                          ["IXPs (AS)", h.total_ixps ? h.relevant_ixps.length + " suspected / " + h.total_ixps : null],
-                          ["facilities (AS)", h.total_facilities ? h.relevant_facilities.length + " suspected / " + h.total_facilities : null]]));
-  const a = link(h.source_url); if (a) panel.appendChild(a);
-  const gs = h.geo_sources || {};
-  const gkeys = Object.keys(gs);
-  if (gkeys.length) {
-    panel.appendChild(title("location sources · " + gkeys.length));
-    for (const k of gkeys) {
-      const v = gs[k];
-      const where = [v.city, v.country].filter(Boolean).join(", ") || "?";
-      panel.appendChild(item(k + " · " + where, null));
-    }
-  }
-  panel.appendChild(title("TTL trust · " + (h.ttl_confidence || "unknown")));
-  panel.appendChild(rows([["probe ttl", h.ttl], ["seen by flows", h.ttl_flows],
-                          ["icmp reply ttl", h.ttl_reply], ["return hops", h.ttl_return_hops]]));
-  for (const r of (h.ttl_reasons || [])) panel.appendChild(item(r, null));
-  if (h.relevant_ixps && h.relevant_ixps.length) {
-    panel.appendChild(title("suspected IXPs · shared with neighbour"));
-    for (const x of h.relevant_ixps) panel.appendChild(item(x.name, x.source_url));
-  }
-  if (h.relevant_facilities && h.relevant_facilities.length) {
-    panel.appendChild(title("suspected facilities"));
-    for (const f of h.relevant_facilities) panel.appendChild(item(f.name + (f.city ? " · " + f.city : ""), f.source_url));
-  }
-}
-function fmtPlace(p) { return p && (p.city || p.country) ? [p.city, p.country].filter(Boolean).join(", ") : "?"; }
-function facLabel(f) {
-  const sup = (f.supports && f.supports.length) ? f.supports.join("+") : (f.method || "");
-  return f.name + (f.city ? " · " + f.city : "") + (sup ? "  [" + sup + "]" : "") + (f.weak ? "  ⚠ weak" : "");
-}
-function showEdge(e) {
-  panel.textContent = "";
-  panel.appendChild(title("TRAVERSAL EDGE"));
-  panel.appendChild(rows([["from", e.source + (e.from_as ? "  " + e.from_as : "")],
-                          ["to", e.target + (e.to_as ? "  " + e.to_as : "")],
-                          ["ttl", e.ttl], ["flows", e.count], ["min_rtt_ms", e.min_rtt_ms],
-                          ["protocols", (e.protocols||[]).join(", ")], ["tools", (e.tools||[]).join(", ")],
-                          ["gap", e.gap ? "yes" : "no"]]));
-  const hand = e.handoff || {ixps:[], facilities:[], bgp:[], geo:null};
-  if (hand.geo) {
-    panel.appendChild(title("endpoint locations"));
-    panel.appendChild(rows([["from", fmtPlace(hand.geo.a)], ["to", fmtPlace(hand.geo.b)],
-                            ["match", hand.geo.match ? ("yes" + (hand.geo.distance_km!=null ? " · " + Math.round(hand.geo.distance_km) + " km" : "")) : "no"],
-                            ["rtt bound", hand.geo.rtt_km_upper!=null ? "≤ " + Math.round(hand.geo.rtt_km_upper) + " km" : null],
-                            ["geo plausible", hand.geo.plausible==null ? null : (hand.geo.plausible ? "yes" : "no · geolocation exceeds rtt")]]));
-  }
-  if (hand.bgp && hand.bgp.length) {
-    panel.appendChild(title("BGP advertisements · prefix seen"));
-    for (const c of hand.bgp)
-      panel.appendChild(item(c.collector + (c.near ? " · near handoff" : "") + (c.path_hits ? " · as-path hits" : "") + "  [" + (c.as_paths||[]).join(" | ") + "]", c.source_url));
-  }
-  panel.appendChild(title("suspected handoff"));
-  if (!hand.ixps.length && !hand.facilities.length) {
-    const note = (e.from_as && e.to_as && e.from_as !== e.to_as)
-      ? "no shared IXP / facility (PeeringDB)" : "intra-AS";
-    panel.appendChild(rows([["", note]]));
-  }
-  for (const x of hand.ixps) panel.appendChild(item("IXP · " + x.name, x.source_url));
-  for (const f of hand.facilities) {
-    panel.appendChild(item(facLabel(f), f.source_url));
-    if (f.bgp && f.bgp.length)
-      for (const ev of f.bgp) panel.appendChild(item("  bgp · " + ev.collector + " (" + ev.distance_km + " km)  [" + (ev.as_paths||[]).join(" | ") + "]", ev.source_url));
-  }
-}
-function showAs(c) {
-  panel.textContent = "";
-  panel.appendChild(title("AS CONTAINER · " + c.label + (c.info.name ? "  " + c.info.name : "")));
-  const a = link(c.info.source_url); if (a) panel.appendChild(a);
-  if (c.info.probe_count != null) {
-    const countries = Object.entries(c.info.probe_countries || {}).map(([k, v]) => k + " " + v).join(", ");
-    panel.appendChild(rows([["RIPE Atlas probes", c.info.probe_count + (countries ? "  (" + countries + ")" : "")]]));
-  }
-  const ixps = c.info.ixps || [], facs = c.info.facilities || [];
-  panel.appendChild(title("suspected IXPs · " + ixps.length + " / " + c.info.total_ixps));
-  if (!ixps.length) panel.appendChild(rows([["", "no shared IXP with scanned neighbours"]]));
-  for (const x of ixps) panel.appendChild(item(x.name, x.source_url));
-  panel.appendChild(title("suspected facilities · " + facs.length + " / " + c.info.total_facilities));
-  if (!facs.length) panel.appendChild(rows([["", "no shared facility with scanned neighbours"]]));
-  for (const f of facs) {
-    panel.appendChild(item(facLabel(f), f.source_url));
-    if (f.bgp && f.bgp.length)
-      for (const ev of f.bgp) panel.appendChild(item("  bgp · " + ev.collector + " (" + ev.distance_km + " km)", ev.source_url));
-  }
-}
-
-function summary() {
-  panel.textContent = "";
-  panel.appendChild(title("GRAPHS · " + GRAPHS.length));
-  for (const g of GRAPHS) {
-    const low = g.hops.filter(h => h.ttl_confidence === "low").length;
-    const med = g.hops.filter(h => h.ttl_confidence === "medium").length;
-    const reach = (g.reachability && !g.reachability.reached)
-      ? "  ·  unreached" + (g.reachability.error ? " " + g.reachability.error : "") : "";
-    panel.appendChild(item((g.label || "?") + "  ·  " + g.hops.length + " hops, " + g.edges.length + " edges, " +
-      "ttl " + (g.hops.length - low - med) + "/" + med + "/" + low + "  ·  " + (g.vantage || "?") + " @ " + (g.started_at || "?") + reach, null));
-  }
-  const collectors = new Map();
-  let sessions = 0, facilities = 0, ixps = 0;
-  for (const g of GRAPHS) {
-    sessions += g.sessions.length;
-    facilities += g.facilities.length;
-    ixps += g.ixps.length;
-    for (const c of (g.collectors || [])) if (!collectors.has(c.collector)) collectors.set(c.collector, c);
-  }
-  panel.appendChild(title("BGP sessions · " + sessions));
-  for (const g of GRAPHS) for (const s of g.sessions.slice(0, 20))
-    panel.appendChild(item(`[${g.run.tool}] ${s.speaker} → ${s.collector}  [${s.as_path}]`, s.source_url));
-  panel.appendChild(title("BGP advertisements · " + collectors.size + " collectors"));
-  for (const c of collectors.values())
-    panel.appendChild(item(c.collector + (c.geo && c.geo.country ? " · " + c.geo.country : "") + "  [" + (c.as_paths||[]).slice(0,2).join(" | ") + "]", c.source_url));
-  panel.appendChild(title("facilities · " + facilities + "  ·  IXPs · " + ixps));
-  const seen = new Set();
-  for (const g of GRAPHS) for (const f of g.facilities) {
-    if (seen.has(f.name)) continue; seen.add(f.name);
-    if (seen.size <= 60) panel.appendChild(item(f.name, f.source_url));
-  }
-}
-
-function apply() { viewport.setAttribute("transform", `translate(${tx},${ty}) scale(${scale})`); }
-function bounds() { let mx=0; for (const g of GRAPHS) mx=Math.max(mx, graphBounds(g).mx); return {mx:mx+160, my:TOTAL+120}; }
-function sizeSvg() { const b=bounds(); svg.setAttribute("width",b.mx); svg.setAttribute("height",b.my); }
-function fit() { sizeSvg(); const b=bounds();
-  scale=Math.min(canvas.clientWidth/b.mx, canvas.clientHeight/b.my, 1); tx=12; ty=12; apply(); }
-
-const TOTAL = layoutRows();
-canvas.addEventListener("mousedown", ev => {
-  canvas.classList.add("grabbing");
-  const sx=ev.clientX-tx, sy=ev.clientY-ty;
-  const move=e2=>{tx=e2.clientX-sx; ty=e2.clientY-sy; apply();};
-  const up=()=>{canvas.classList.remove("grabbing"); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up);};
-  document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
-});
-canvas.addEventListener("wheel", ev => { ev.preventDefault();
-  scale=Math.max(0.25, Math.min(3, scale*(ev.deltaY<0?1.1:0.9))); apply(); }, {passive:false});
-draw(); fit(); summary();
-window.addEventListener("resize", () => { sizeSvg(); apply(); });
+const container = document.getElementById("graphs");
+for (const g of DATA.graphs){ container.appendChild(renderGraph(g)); }
 </script>
 </body>
 </html>

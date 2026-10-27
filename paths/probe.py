@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,41 +30,67 @@ VOYAGE_PROTOCOLS = {0: "icmp", 1: "icmp6", 2: "tcp", 3: "udp"}
 
 _sudo_cache: list[str] | None = None
 
+_PING_LOSS = re.compile(r"([\d.]+)% packet loss")
+_PING_RTT = re.compile(r"rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/[\d.]+/[\d.]+ ms")
+
 
 def available(tool: str = SCAMPER) -> bool:
     return shutil.which(TOOLS.get(tool, tool)) is not None
 
 
-def _sudo_allows(command: str) -> bool:
+def parse_ping_output(text: str, returncode: int = 0) -> dict:
+    loss = _PING_LOSS.search(text)
+    rtt = _PING_RTT.search(text)
+    loss_pct = float(loss.group(1)) if loss else (100.0 if returncode != 0 else None)
+    if loss_pct is not None:
+        loss_pct = min(loss_pct, 100.0)
+    return {
+        "reachable": returncode == 0 and (loss_pct is None or loss_pct < 100.0),
+        "loss_percent": loss_pct,
+        "rtt_min_ms": float(rtt.group(1)) if rtt else None,
+        "rtt_avg_ms": float(rtt.group(2)) if rtt else None,
+    }
+
+
+def capture_ping(target: str, count: int = 3, timeout: int = 10) -> dict | None:
+    ping = shutil.which("ping")
+    if ping is None:
+        return None
     try:
         result = subprocess.run(
-            ["sudo", "-n", "-l", command], capture_output=True, text=True, timeout=10
+            [ping, "-c", str(count), "-n", target],
+            capture_output=True, text=True, timeout=timeout,
         )
-        return result.returncode == 0
     except Exception:
-        return False
+        return None
+    return parse_ping_output(result.stdout or "", result.returncode)
 
 
-def _scamper_command() -> list[str]:
-    global _sudo_cache
-    if _sudo_cache is None:
-        if shutil.which(SCAMPER) is None:
-            raise RuntimeError(f"{SCAMPER} not found on PATH")
-        if shutil.which("sudo") is not None and _sudo_allows(SCAMPER):
-            _sudo_cache = ["sudo", "-n", SCAMPER]
-        else:
-            _sudo_cache = [SCAMPER]
-    return _sudo_cache
+def _scamper_candidates() -> list[str]:
+    candidates: list[str] = []
+    for path in (shutil.which(SCAMPER), "/usr/bin/scamper"):
+        if path and os.path.exists(path) and path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def _scamper_commands() -> list[list[str]]:
+    candidates = _scamper_candidates()
+    if not candidates:
+        raise RuntimeError(f"{SCAMPER} not found on PATH")
+    commands = [["sudo", "-n", path] for path in candidates]
+    commands += [[path] for path in candidates]
+    return commands
 
 
 def capture_scamper(
     target: str,
     flows: int = 4,
-    max_ttl: int = 20,
+    max_ttl: int = 32,
     timeout: int = 180,
     protocols: tuple[str, ...] = ("udp",),
 ) -> list[dict]:
-    command = _scamper_command()
+    global _sudo_cache
     args: list[str] = []
     sport = 40000
     for protocol in protocols:
@@ -71,15 +98,23 @@ def capture_scamper(
         for index in range(flows):
             args += ["-I", f"trace -P {paris} -q 2 -w 1 -m {max_ttl} -s {sport + index} {target}"]
         sport += 1000
+    commands = [_sudo_cache] if _sudo_cache else _scamper_commands()
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "scamper.json")
-        subprocess.run(
-            command + ["-p", "100", "-w", "1", "-O", "json", "-o", out] + args,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=True,
-        )
+        last_error = None
+        for command in commands:
+            result = subprocess.run(
+                command + ["-p", "100", "-w", "1", "-O", "json", "-o", out] + args,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                _sudo_cache = command
+                break
+            last_error = (result.stderr or result.stdout or f"scamper exited {result.returncode}").strip()
+        else:
+            raise RuntimeError(last_error or "scamper failed")
         with open(out) as handle:
             objects = [json.loads(line) for line in handle if line.strip()]
     return [obj for obj in objects if obj.get("type") == "trace"]
@@ -115,7 +150,7 @@ def parse_scamper(traces: list[dict]) -> list[dict]:
     return hops
 
 
-def capture_dublin(target: str, flows: int = 4, max_ttl: int = 20, timeout: int = 180) -> dict:
+def capture_dublin(target: str, flows: int = 4, max_ttl: int = 32, timeout: int = 180) -> dict:
     if not available("dublin"):
         raise RuntimeError(f"{DUBLIN} not found on PATH")
     with tempfile.TemporaryDirectory() as tmp:
@@ -266,7 +301,7 @@ def capture_voyage(target: str, max_ttl: int = 32, protocol: str = "icmp", timeo
 def run(
     target: str,
     flows: int = 4,
-    max_ttl: int = 20,
+    max_ttl: int = 32,
     tool: str = "scamper",
     timeout: int = 180,
     protocols: tuple[str, ...] = ("udp",),

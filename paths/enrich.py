@@ -1,439 +1,261 @@
-"""Graph mutation from source analysis.
+"""Graph enrichment from the source-analysis layer.
 
-`paths/` no longer talks to sources directly: it calls the source-analysis layer
-(`query.py`, `bgp.py`) and turns facts into nodes/edges. Each fact lands in its
-own layer, so measured router topology is never rewritten.
+Adds the facts the graph needs, without rewriting measured topology:
 
-Layers added here:
-  origin     hop/announcing IP -> AS            (Cymru, RIPEstat, BGP)
-  as         AS -> AS neighbour                 (RIPEstat asn-neighbours)
-  facility   AS -> PeeringDB facility
-  ix         AS -> PeeringDB IX
-  session    announcing IP -> collector         (RouteViews: real BGP sessions)
-  collector  collector node (interface IP + lat/lon)
-IP aliasing (one IP used by more than one AS) is recorded as a node attribute.
+- every hop IP is resolved to its origin AS (`query.asn_of`), stored as node
+  attrs `asn` / `as_name`;
+- every AS's PeeringDB facilities and IXPs are fetched once (cached) and stored
+  on an `as` node;
+- every inter-AS traversal edge gets a `handoff`: the facilities and IXPs where
+  both ASes are present, whether the outgoing AS advertises the destination IP
+  (`bgp.owns`), plus peering evidence (adjacent AS paths from RouteViews, RIPE
+  RIS and bgproutes.io vantage points) and whether the two hop IPs are
+  geographically consistent. That is what the HTML shows on the link.
 """
 
 from __future__ import annotations
 
 import ipaddress
-import os
-from collections import defaultdict
 
-import bgp
-import query
-import registry.store as raw_store
+from source import bgp, query, topology
 
-import paths.alias as alias
 import paths.store as store
-
-
-def _env_off(name: str) -> bool:
-    return os.environ.get(name, "").lower() in ("1", "true", "on", "yes")
-
-
-def _is_ip(value: str) -> bool:
-    try:
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        return False
 
 
 def as_key(asn) -> str:
     return f"AS{asn}"
 
 
-def collector_key(name: str) -> str:
-    return f"COL:{name}"
+def _facility_key(facility: dict):
+    return facility.get("fac_id") or facility.get("name")
 
 
-def target_ip(graph) -> str | None:
-    best, best_ttl = None, -1
-    for _src, dst, data in graph.edges(data=True):
-        if data.get("layer") in (None, "interface") and _is_ip(dst):
-            ttl = data.get("ttl")
-            if ttl is not None and ttl > best_ttl:
-                best, best_ttl = dst, ttl
-    if best:
-        return best
-    ips = [node for node in graph.nodes if _is_ip(node)]
-    return ips[-1] if ips else None
+def _ix_key(ix: dict):
+    return ix.get("ix_id")
 
 
-def run_target(conn, run_id) -> str | None:
-    row = conn.execute("SELECT target FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-    return row[0] if row else None
-
-
-def target_prefix(conn, run_id, graph) -> str | None:
-    ip = run_target(conn, run_id) or target_ip(graph)
-    if not ip:
-        return None
+def _geo(ip: str, asn_info: dict) -> dict:
+    """Country + coordinates for an interface IP, best-effort and cached upstream."""
+    country = (asn_info or {}).get("country")
+    lat = lon = city = None
+    located = None
     try:
-        routes = query.fetch_parsed("routeviews.prefix", ip)["routes"]
+        if ipaddress.ip_address(ip).is_global:
+            located = query.geo(ip)
     except Exception:
-        routes = []
-    best, best_length = None, -1
-    for route in routes:
-        prefix = route.get("prefix") or ""
-        if "/" in prefix:
-            try:
-                length = int(prefix.split("/")[1])
-            except ValueError:
-                continue
-            if length > best_length:
-                best, best_length = route, length
-    if best:
-        return best.get("prefix")
-    info = query.asn_of(ip)
-    return info.get("prefix") if info else None
+        located = None
+    if located:
+        country = located.get("country") or country
+        city = located.get("city")
+        lat = located.get("latitude")
+        lon = located.get("longitude")
+    return {"country": country, "city": city, "latitude": lat, "longitude": lon}
 
 
-def _add_origin(conn, run_id, graph, ip, asn, source, prefix=None):
-    key = as_key(asn)
-    graph.add_node(key, layer="as", asn=str(asn))
-    graph.add_edge(ip, key, layer="origin", asn=str(asn))
-    store.add_node(conn, "as", key, {"asn": str(asn)})
-    store.add_edge(conn, run_id, "origin", ip, key, attrs={"source": source, "prefix": prefix, "source_url": f"https://stat.ripe.net/{ip}"})
-
-
-def _set_node_attrs(conn, graph, layer: str, key: str, extra: dict) -> None:
-    if key in graph:
-        graph.nodes[key].update(extra)
-    attrs = {
-        k: (sorted(v) if isinstance(v, set) else v)
-        for k, v in graph.nodes.get(key, {}).items()
-        if k != "layer"
+def _geo_match(a: dict, b: dict) -> dict:
+    same_country = bool(a["country"] and b["country"] and a["country"] == b["country"])
+    distance = topology.distance_km(
+        a.get("latitude"), a.get("longitude"), b.get("latitude"), b.get("longitude")
+    )
+    close = distance is not None and distance < 800
+    return {
+        "src_country": a["country"],
+        "dst_country": b["country"],
+        "same_country": same_country,
+        "distance_km": round(distance, 1) if distance is not None else None,
+        "match": same_country or close,
     }
-    attrs.update(extra)
-    store.add_node(conn, layer, key, attrs)
 
 
-def expand_as_names(conn, run_id, graph, asns: set[str]) -> int:
-    named = 0
+def expand(conn, run_id, graph, target: str) -> dict:
+    from registry import store as raw_store
+
+    with raw_store.capture(conn):
+        return _expand(conn, run_id, graph, target)
+
+
+def _expand(conn, run_id, graph, target: str) -> dict:
+    interfaces = [node for node in graph.nodes()]
+    ip_info: dict[str, dict] = {}
+    asns: set[str] = set()
+    for ip in interfaces:
+        info = query.asn_of(ip)
+        ip_info[ip] = info or {}
+        if not info or not info.get("asn"):
+            continue
+        asn = str(info["asn"])
+        asns.add(asn)
+        graph.nodes[ip]["asn"] = asn
+
+    # Once per unique IP/AS: geography, hostname, neighbours, PeeringDB directory.
+    geo_cache = {ip: _geo(ip, ip_info[ip]) for ip in interfaces}
+    neighbours = {asn: topology.neighbour_map(asn) for asn in asns}
+
+    as_name: dict[str, str | None] = {}
+    as_fac: dict[str, dict] = {}
+    as_ix: dict[str, dict] = {}
+    ip_ixp: dict[str, dict] = {}
+    ix_nets: list[tuple[object, str]] = []
     for asn in sorted(asns):
         name = query.as_name(asn)
-        if not name:
-            continue
-        _set_node_attrs(conn, graph, "as", as_key(asn), {"name": name})
-        named += 1
-    return named
-
-
-def expand_geo(conn, run_id, graph, budget: int = 20) -> int:
-    located = 0
-    interfaces = [
-        node for node, data in graph.nodes(data=True) if data.get("layer", "interface") == "interface"
-    ]
-    for ip in interfaces[:budget]:
-        result = query.geo_all(ip)
-        geo = result.get("geo")
-        if not geo:
-            continue
-        _set_node_attrs(conn, graph, "interface", ip, {"geo": geo, "geo_sources": result.get("sources") or {}})
-        located += 1
-    return located
-
-
-def _city(value) -> str:
-    return (value or "").strip().casefold()
-
-
-def expand_facility_geo(conn, run_id, graph, budget: int = 12) -> int:
-    cities = {
-        _city(data["geo"].get("city"))
-        for _node, data in graph.nodes(data=True)
-        if data.get("layer", "interface") == "interface" and data.get("geo")
-    }
-    cities.discard("")
-    memberships: dict[str, list[str]] = {}
-    for src, dst, data in graph.edges(data=True):
-        if data.get("layer") == "facility":
-            memberships.setdefault(dst, []).append(src)
-    shared = {key for key, sources in memberships.items() if len(set(sources)) >= 2}
-    candidates = [
-        key
-        for key, data in graph.nodes(data=True)
-        if data.get("layer") == "facility" and (key in shared or _city(data.get("city")) in cities)
-    ]
-    located = 0
-    for key in candidates[:budget]:
-        data = graph.nodes[key]
-        fac_id = data.get("fac_id")
-        if fac_id is None:
-            continue
-        info = query.facility_info(fac_id)
-        if not info:
-            continue
-        _set_node_attrs(
-            conn, graph, "facility", key,
-            {
-                "latitude": info.get("latitude"),
-                "longitude": info.get("longitude"),
-                "city": info.get("city") or data.get("city"),
-                "country": info.get("country") or data.get("country"),
-            },
-        )
-        located += 1
-    return located
-
-
-def expand_ix_prefixes(conn, run_id, graph, budget: int = 12) -> int:
-    memberships: dict[str, list[str]] = {}
-    for src, dst, data in graph.edges(data=True):
-        if data.get("layer") == "ix":
-            memberships.setdefault(dst, []).append(src)
-    shared = [key for key, sources in memberships.items() if len(set(sources)) >= 2]
-    fetched = 0
-    for key in shared[:budget]:
-        data = graph.nodes[key]
-        ixlan_id = data.get("ixlan_id")
-        if ixlan_id is None:
-            continue
-        prefixes = query.ix_prefixes(ixlan_id)
-        if not prefixes:
-            continue
-        _set_node_attrs(conn, graph, "ix", key, {"prefixes": prefixes})
-        fetched += 1
-    return fetched
-
-
-def expand_probes(conn, run_id, graph, asns: set[str]) -> int:
-    counted = 0
-    for asn in sorted(asns):
-        parsed = query.atlas_probes(asn)
-        if not parsed:
-            continue
-        _set_node_attrs(
-            conn, graph, "as", as_key(asn),
-            {"probe_count": parsed.get("count"), "probe_countries": parsed.get("countries") or {}},
-        )
-        counted += 1
-    return counted
-
-
-def expand_origins(conn, run_id, graph, budget: int) -> set[str]:
-    asns: set[str] = set()
-    interfaces = [
-        node for node, data in graph.nodes(data=True) if data.get("layer", "interface") == "interface"
-    ]
-    for ip in interfaces[:budget]:
-        info = query.asn_of(ip)
-        if not info:
-            continue
-        _add_origin(conn, run_id, graph, ip, info["asn"], info.get("source"), info.get("prefix"))
-        asns.add(str(info["asn"]))
-    return asns
-
-
-def expand_neighbours(conn, run_id, graph, asns: set[str], cap: int) -> int:
-    added = 0
-    for asn in sorted(asns):
-        try:
-            entries = query.neighbours(asn)[:cap]
-        except Exception:
-            continue
-        for entry in entries:
-            neighbour = str(entry.get("asn"))
-            key = as_key(neighbour)
-            graph.add_node(key, layer="as", asn=neighbour)
-            graph.add_edge(as_key(asn), key, layer="as", rel=entry.get("type"))
-            store.add_node(conn, "as", key, {"asn": neighbour})
-            store.add_edge(conn, run_id, "as", as_key(asn), key, attrs={"rel": entry.get("type"), "power": entry.get("power"), "source_url": f"https://stat.ripe.net/AS{asn}"})
-            added += 1
-    return added
-
-
-def expand_peeringdb(conn, run_id, graph, asns: set[str], cap: int = 200) -> tuple[int, int]:
-    facilities_added = ix_added = 0
-    for asn in sorted(asns):
+        as_name[asn] = name
         try:
             net_id = query.peeringdb_net(asn)
         except Exception:
             net_id = None
-        if net_id is None:
-            continue
-        try:
-            for facility in query.facilities(net_id)[:cap]:
-                name = facility.get("name")
-                if not name:
-                    continue
-                key = f"FAC:{name}"
-                graph.add_node(key, layer="facility", name=name, city=facility.get("city"), country=facility.get("country"), fac_id=facility.get("fac_id"))
-                graph.add_edge(as_key(asn), key, layer="facility")
-                store.add_node(conn, "facility", key, {"name": name, "city": facility.get("city"), "country": facility.get("country"), "fac_id": facility.get("fac_id"), "source_url": f"https://www.peeringdb.com/search?q={name}"})
-                store.add_edge(conn, run_id, "facility", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/search?q={name}"})
-                facilities_added += 1
-        except Exception:
-            pass
-        try:
-            for ix in query.ixps(net_id)[:cap]:
-                ix_id = ix.get("ix_id")
-                if ix_id is None:
-                    continue
-                key = f"IX:{ix_id}"
-                ixlan_id = ix.get("ixlan_id")
-                graph.add_node(key, layer="ix", name=ix.get("name"))
-                graph.add_edge(as_key(asn), key, layer="ix", ipaddr4=ix.get("ipaddr4"), ipaddr6=ix.get("ipaddr6"))
-                store.add_node(conn, "ix", key, {"name": ix.get("name"), "ix_id": ix_id, "ixlan_id": ixlan_id, "source_url": f"https://www.peeringdb.com/ix/{ix_id}"})
-                store.add_edge(conn, run_id, "ix", as_key(asn), key, attrs={"source_url": f"https://www.peeringdb.com/ix/{ix_id}", "ipaddr4": ix.get("ipaddr4"), "ipaddr6": ix.get("ipaddr6")})
-                ix_added += 1
-        except Exception:
-            pass
-    return facilities_added, ix_added
-
-
-def expand_sessions(conn, run_id, graph, cap: int = 40) -> dict:
-    prefix = target_prefix(conn, run_id, graph)
-    if not prefix:
-        return {"prefix": None, "sessions": 0, "collectors": 0}
-    try:
-        routes = bgp.announcements(prefix)
-    except Exception:
-        return {"prefix": prefix, "sessions": 0, "collectors": 0}
-    facts = bgp.sessions(routes, cap=cap)
-    collectors: dict[str, dict] = {}
-    sessions = 0
-    for fact in facts:
-        speaker = fact.get("speaker_ip")
-        speaker_asn = fact.get("speaker_asn")
-        name = fact.get("collector")
-        if not speaker or not name:
-            continue
-        graph.add_node(speaker, layer="interface")
-        store.add_node(conn, "interface", speaker)
-        if speaker_asn is not None:
-            _add_origin(conn, run_id, graph, speaker, speaker_asn, "routeviews")
-        if name not in collectors:
+        facilities = query.facilities(net_id) if net_id else []
+        ixs = query.ixps(net_id) if net_id else []
+        as_fac[asn] = {_facility_key(f): f for f in facilities if _facility_key(f)}
+        as_ix[asn] = {_ix_key(ix): ix for ix in ixs if _ix_key(ix) is not None}
+        for ix in ixs:
+            for ip in (ix.get("ipaddr4"), ix.get("ipaddr6")):
+                if ip:
+                    ip_ixp[ip] = {"name": ix.get("name"), "ix_id": ix.get("ix_id")}
+        ixlan_ids = sorted({ix.get("ixlan_id") for ix in ixs if ix.get("ixlan_id") is not None})
+        if ixlan_ids and len(ixlan_ids) <= 200:
+            name_by_ixlan = {ix.get("ixlan_id"): ix.get("name") for ix in ixs if ix.get("ixlan_id") is not None}
             try:
-                info = bgp.collector(name)
+                prefixes = query.ix_prefixes(ixlan_ids)
             except Exception:
-                info = {}
-            collectors[name] = info
-            graph.add_node(collector_key(name), layer="collector", name=name)
-            store.add_node(conn, "collector", collector_key(name), {"name": name, "source_url": f"https://api.routeviews.org/collector/?name={name}", **info})
-        graph.add_edge(speaker, collector_key(name), layer="session", collector=name)
-        store.add_edge(
-            conn, run_id, "session", speaker, collector_key(name),
-            attrs={"collector": name, "as_path": fact.get("as_path"), "prefix": prefix, "timestamp": fact.get("timestamp"), "source_url": f"https://api.routeviews.org/prefix/{prefix}"},
-        )
-        sessions += 1
-    return {"prefix": prefix, "sessions": sessions, "collectors": len(collectors)}
-
-
-def _cached_rdns(ip: str) -> str | None:
-    try:
-        return (query.fetch_parsed("rdns.ptr", ip) or {}).get("hostname")
-    except Exception:
-        return None
-
-
-def expand_aliases(conn, run_id, graph, resolver=None) -> dict:
-    resolver = resolver or _cached_rdns
-    hops: set[str] = set()
-    for src, dst, data in graph.edges(data=True):
-        if data.get("layer") in (None, "interface"):
-            hops.add(src)
-            hops.add(dst)
-    rdns = alias.rdns_map(sorted(hops), resolver)
-    clusters = alias.clusters(alias.rdns_pairs(rdns))
-    for members in clusters:
-        key = alias.machine_key(members)
-        graph.add_node(key, layer="machine", interfaces=members)
-        store.add_node(conn, "machine", key, {"interfaces": members, "method": "rdns"})
-        for ip in members:
-            graph.add_edge(ip, key, layer="machine", method="rdns")
-            store.add_edge(conn, run_id, "machine", ip, key, attrs={"method": "rdns", "confidence": 0.8})
-    return {"machines": len(clusters), "clustered": sum(len(members) for members in clusters)}
-
-
-def mark_aliasing(conn, run_id, graph) -> dict[str, list[str]]:
-    asns: dict[str, set[str]] = defaultdict(set)
-    for src, dst, data in graph.edges(data=True):
-        if data.get("layer") == "origin":
-            asns[src].add(dst)
-    aliased = {ip: sorted(values) for ip, values in asns.items() if len(values) > 1}
-    for ip, values in aliased.items():
-        graph.nodes[ip]["aliased_asns"] = values
-        store.add_node(conn, "interface", ip, {"aliased_asns": values})
-    return aliased
-
-
-def expand(
-    conn,
-    run_id,
-    graph,
-    budget: int = 20,
-    neighbours_cap: int = 40,
-    sessions: bool = True,
-    peeringdb: bool = True,
-    neighbours: bool = True,
-    aliases: bool = True,
-    geo: bool = True,
-    probes: bool = True,
-) -> dict:
-    with raw_store.capture(conn):
-        return _expand(
+                prefixes = []
+            for entry in prefixes:
+                try:
+                    net = ipaddress.ip_network(entry["prefix"])
+                except Exception:
+                    continue
+                name = name_by_ixlan.get(entry["ixlan_id"])
+                if name:
+                    ix_nets.append((net, name))
+        store.add_node(
             conn,
-            run_id,
-            graph,
-            budget=budget,
-            neighbours_cap=neighbours_cap,
-            sessions=sessions,
-            peeringdb=peeringdb,
-            neighbours=neighbours,
-            aliases=aliases,
-            geo=geo,
-            probes=probes,
+            "as",
+            as_key(asn),
+            {
+                "asn": asn,
+                "name": name,
+                "facilities": [
+                    {"name": f.get("name"), "city": f.get("city"), "country": f.get("country")}
+                    for f in facilities
+                    if f.get("name")
+                ],
+                "ixps": [{"name": ix.get("name"), "ix_id": ix.get("ix_id")} for ix in ixs if ix.get("name")],
+            },
         )
 
+    # Attach the resolved facts to each interface node so the HTML panel can
+    # show them the way `aranya <IP>` shows a claim's provenance.
+    for ip in interfaces:
+        info = ip_info.get(ip) or {}
+        asn = str(info["asn"]) if info.get("asn") is not None else None
+        geo = geo_cache.get(ip) or {}
+        hostname = None
+        try:
+            if ipaddress.ip_address(ip).is_global:
+                hostname = query.hostname(ip)
+        except Exception:
+            hostname = None
+        ixp = ip_ixp.get(ip)
+        if not ixp:
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                addr = None
+            if addr is not None and addr.is_global:
+                for net, name in ix_nets:
+                    if addr in net:
+                        ixp = {"name": name}
+                        break
+        bgp_info = {}
+        try:
+            if ipaddress.ip_address(ip).is_global:
+                bgp_info = query.bgp_tools(ip) or {}
+        except Exception:
+            bgp_info = {}
+        store.set_node_attrs(
+            conn,
+            "interface",
+            ip,
+            {
+                "asn": asn,
+                "as_name": as_name.get(asn) if asn else None,
+                "prefix": info.get("prefix"),
+                "country": geo.get("country"),
+                "city": geo.get("city"),
+                "latitude": geo.get("latitude"),
+                "longitude": geo.get("longitude"),
+                "hostname": hostname,
+                "ixp": ixp["name"] if ixp else None,
+                "bgp_asn": bgp_info.get("asn"),
+                "bgp_prefix": bgp_info.get("prefix"),
+                "bgp_country": bgp_info.get("country"),
+                "bgp_name": bgp_info.get("name"),
+            },
+        )
 
-def _expand(
-    conn,
-    run_id,
-    graph,
-    budget: int = 20,
-    neighbours_cap: int = 40,
-    sessions: bool = True,
-    peeringdb: bool = True,
-    neighbours: bool = True,
-    aliases: bool = True,
-    geo: bool = True,
-    probes: bool = True,
-) -> dict:
-    sessions = sessions and not _env_off("PATHS_NO_SESSIONS")
-    peeringdb = peeringdb and not _env_off("PATHS_NO_PEERINGDB")
-    neighbours = neighbours and not _env_off("PATHS_NO_NEIGHBOURS")
-    aliases = aliases and not _env_off("PATHS_NO_ALIAS")
-    geo = geo and not _env_off("PATHS_NO_GEO")
-    probes = probes and not _env_off("PATHS_NO_PROBES")
+    # AS paths toward the destination: the BGP view of every hop on this route.
+    target_prefix = (ip_info.get(target) or {}).get("prefix")
+    if not target_prefix:
+        target_prefix = (query.asn_of(target) or {}).get("prefix")
+    paths = topology.target_paths(target, prefix=target_prefix)
 
-    asns = expand_origins(conn, run_id, graph, budget)
-    named = expand_as_names(conn, run_id, graph, asns)
-    as_edges = expand_neighbours(conn, run_id, graph, asns, neighbours_cap) if neighbours else 0
-    facilities_added, ix_added = expand_peeringdb(conn, run_id, graph, asns) if peeringdb else (0, 0)
-    session_stats = expand_sessions(conn, run_id, graph) if sessions else {"prefix": None, "sessions": 0, "collectors": 0}
-    alias_stats = expand_aliases(conn, run_id, graph) if aliases else {"machines": 0, "clustered": 0}
-    located = expand_geo(conn, run_id, graph, budget) if geo else 0
-    facility_geo = expand_facility_geo(conn, run_id, graph) if geo else 0
-    ix_prefixes = expand_ix_prefixes(conn, run_id, graph) if peeringdb else 0
-    probed = expand_probes(conn, run_id, graph, asns) if probes else 0
-    aliased = mark_aliasing(conn, run_id, graph)
+    handoffs = 0
+    for src, dst in graph.edges():
+        a_asn = graph.nodes[src].get("asn")
+        b_asn = graph.nodes[dst].get("asn")
+        if not (a_asn and b_asn) or a_asn == b_asn:
+            continue
+
+        adjacency = [
+            entry for entry in paths if topology.contiguous(a_asn, b_asn, entry["as_path"])
+        ]
+        relation = neighbours.get(a_asn, {}).get(b_asn) or neighbours.get(b_asn, {}).get(a_asn)
+        peering_neighbours = bool(relation)
+        shared_fac = [
+            {
+                "name": as_fac[a_asn][k].get("name"),
+                "city": as_fac[a_asn][k].get("city"),
+                "country": as_fac[a_asn][k].get("country"),
+            }
+            for k in sorted(set(as_fac.get(a_asn, {})) & set(as_fac.get(b_asn, {})))
+        ]
+        shared_ix = [
+            {"name": as_ix[a_asn][k].get("name")}
+            for k in sorted(set(as_ix.get(a_asn, {})) & set(as_ix.get(b_asn, {})))
+        ]
+        geo = _geo_match(geo_cache[src], geo_cache[dst])
+        try:
+            announces = bgp.owns(int(a_asn), target)
+        except Exception:
+            announces = None
+        confirmed = bool(adjacency) and geo["match"]
+        handoff = {
+            "from_as": a_asn,
+            "to_as": b_asn,
+            "facilities": shared_fac,
+            "ixps": shared_ix,
+            "ixp": {
+                "src": ip_ixp.get(src, {}).get("name"),
+                "dst": ip_ixp.get(dst, {}).get("name"),
+            },
+            "announces_dest": announces,
+            "adjacency": adjacency,
+            "neighbours": peering_neighbours,
+            "ris": {
+                "type": relation.get("type") if relation else None,
+                "power": relation.get("power") if relation else None,
+                "v4_peers": relation.get("v4_peers") if relation else None,
+                "v6_peers": relation.get("v6_peers") if relation else None,
+            },
+            "geo": geo,
+            "confirmed": confirmed,
+        }
+        graph[src][dst]["handoff"] = handoff
+        store.set_edge_attrs(conn, run_id, "interface", src, dst, {"handoff": handoff})
+        handoffs += 1
+
     store.commit(conn)
     return {
-        "origin_edges": len(asns),
-        "as_edges": as_edges,
-        "facilities": facilities_added,
-        "ixps": ix_added,
+        "hops": len(interfaces),
         "asns": sorted(asns),
-        "named": named,
-        "located": located,
-        "facility_geo": facility_geo,
-        "ix_prefixes": ix_prefixes,
-        "probed": probed,
-        "sessions": session_stats,
-        "machines": alias_stats["machines"],
-        "clustered": alias_stats["clustered"],
-        "aliased": aliased,
+        "handoffs": handoffs,
     }

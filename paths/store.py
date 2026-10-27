@@ -168,6 +168,38 @@ def add_edge(
     )
 
 
+def set_node_attrs(conn: sqlite3.Connection, layer: str, key: str, extra: dict) -> None:
+    node_id = f"{layer}:{key}"
+    row = conn.execute("SELECT attrs FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+    attrs = json.loads(row[0] or "{}") if row else {}
+    attrs.update(extra)
+    conn.execute(
+        "INSERT INTO nodes (node_id, layer, key, attrs) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(node_id) DO UPDATE SET attrs = excluded.attrs",
+        (node_id, layer, str(key), json.dumps(attrs, sort_keys=True)),
+    )
+
+
+def set_edge_attrs(conn: sqlite3.Connection, run_id: str, layer: str, src: str, dst: str, extra: dict) -> None:
+    row = conn.execute(
+        "SELECT attrs FROM edges WHERE run_id = ? AND layer = ? AND src = ? AND dst = ?",
+        (run_id, layer, src, dst),
+    ).fetchone()
+    attrs = json.loads(row[0] or "{}") if row else {}
+    attrs.update(extra)
+    if row is None:
+        conn.execute(
+            "INSERT INTO edges (run_id, layer, src, dst, ttl, count, min_rtt_ms, attrs) "
+            "VALUES (?, ?, ?, ?, NULL, 1, NULL, ?)",
+            (run_id, layer, src, dst, json.dumps(attrs, sort_keys=True)),
+        )
+    else:
+        conn.execute(
+            "UPDATE edges SET attrs = ? WHERE run_id = ? AND layer = ? AND src = ? AND dst = ?",
+            (json.dumps(attrs, sort_keys=True), run_id, layer, src, dst),
+        )
+
+
 def commit(conn: sqlite3.Connection) -> None:
     conn.commit()
 
@@ -187,3 +219,68 @@ def graph_counts(conn: sqlite3.Connection, run_id: str) -> dict:
         "nodes": {layer: count for layer, count in nodes},
         "edges": {layer: {"distinct": distinct, "observations": observed} for layer, distinct, observed in edges},
     }
+
+def _count(conn: sqlite3.Connection, table: str, where: str = "", params: tuple = ()) -> int:
+    return conn.execute(f"SELECT COUNT(*) FROM {table}{where}", params).fetchone()[0]
+
+
+def clear(conn: sqlite3.Connection, target: str | None = None) -> dict:
+    """Delete stored path runs and derived data.
+
+    With ``target`` set, remove only runs for that destination and the fetch
+    rows tied to them. Without it, empty every table in the paths database.
+    """
+    if target is not None:
+        rows = conn.execute("SELECT run_id FROM runs WHERE target = ?", (target,)).fetchall()
+        run_ids = [row[0] for row in rows]
+        counts = {
+            "runs": len(run_ids),
+            "hops": 0,
+            "edges": 0,
+            "nodes": 0,
+            "fetches": 0,
+        }
+        if run_ids:
+            placeholders = ",".join("?" for _ in run_ids)
+            counts["hops"] = _count(conn, "hops", f" WHERE run_id IN ({placeholders})", tuple(run_ids))
+            counts["edges"] = _count(conn, "edges", f" WHERE run_id IN ({placeholders})", tuple(run_ids))
+            counts["fetches"] = _count(
+                conn,
+                "fetches",
+                f" WHERE ip = ? OR ip IN (SELECT src_ip FROM hops WHERE run_id IN ({placeholders}) AND src_ip IS NOT NULL)",
+                (target, *run_ids),
+            )
+            before_nodes = _count(conn, "nodes")
+            conn.execute(f"DELETE FROM edges WHERE run_id IN ({placeholders})", run_ids)
+            conn.execute(
+                f"DELETE FROM fetches WHERE ip = ? OR ip IN "
+                f"(SELECT src_ip FROM hops WHERE run_id IN ({placeholders}) AND src_ip IS NOT NULL)",
+                (target, *run_ids),
+            )
+            conn.execute(f"DELETE FROM hops WHERE run_id IN ({placeholders})", run_ids)
+            conn.execute(f"DELETE FROM runs WHERE run_id IN ({placeholders})", run_ids)
+            conn.execute(
+                "DELETE FROM nodes WHERE layer = 'interface' AND key NOT IN ("
+                "SELECT src_ip FROM hops WHERE src_ip IS NOT NULL "
+                "UNION SELECT src FROM edges UNION SELECT dst FROM edges)"
+            )
+            if _count(conn, "runs") == 0:
+                conn.execute("DELETE FROM nodes")
+            counts["nodes"] = before_nodes - _count(conn, "nodes")
+        else:
+            counts["fetches"] = _count(conn, "fetches", " WHERE ip = ?", (target,))
+            conn.execute("DELETE FROM fetches WHERE ip = ?", (target,))
+        conn.commit()
+        return counts
+
+    counts = {
+        "runs": _count(conn, "runs"),
+        "hops": _count(conn, "hops"),
+        "edges": _count(conn, "edges"),
+        "nodes": _count(conn, "nodes"),
+        "fetches": _count(conn, "fetches"),
+    }
+    for table in ("edges", "hops", "nodes", "runs", "fetches"):
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+    return counts

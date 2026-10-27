@@ -4,6 +4,11 @@
       "prefix": "193.110.13.0/24",
       "protocol": "IPv4",
       "ixlan_id": 128
+    },
+    {
+      "prefix": "2001:7f8:1::/64",
+      "protocol": "IPv6",
+      "ixlan_id": 2
     }
   ]
 }

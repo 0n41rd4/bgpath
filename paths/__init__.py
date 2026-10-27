@@ -1,9 +1,8 @@
-"""aranya.paths - path & topology exploration sub-project.
+"""aranya.paths — ping + traceroute and a per-tool topological graph.
 
-Measurement and graph layers live here; source enrichment reuses aranya's
-adapter registry (`registry/`). The graph is kept topological: nodes and
-edges are routers/interfaces/ASes/IXPs/facilities, and every geographic claim
-is an annotation, never a coordinate baked into the topology.
+Measurement (`probe.py`, `ingest.py`), graph construction (`graph.py`),
+persistence (`store.py`), source enrichment (`enrich.py`) and rendering
+(`export.py`) live here; source queries reuse aranya's `source` layer.
 """
 
 import os

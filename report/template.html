@@ -41,6 +41,8 @@
   .legend .item { margin-right:14px; white-space:nowrap; }
   .swatch { display:inline-block; width:11px; height:11px; border-radius:2px; margin-right:5px;
             vertical-align:middle; color:#fff; text-align:center; line-height:11px; font-size:9px; }
+  .group { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+           margin:16px 0 7px; font-weight:600; }
   .card { border:1px solid var(--line); border-radius:6px; margin:0 0 10px; background:var(--panel); }
   .card > summary { cursor:pointer; padding:8px 10px; display:flex; gap:10px; align-items:baseline; }
   .card > summary .name { font-weight:700; min-width:20ch; }
@@ -69,8 +71,16 @@
             box-shadow:-8px 0 24px rgba(0,0,0,.4); display:none; z-index:20; }
   #drawer.open { display:block; }
   #drawer h2 { font-size:13px; margin:0 0 8px; }
+  #drawer .desc { margin:0 0 8px; }
   #drawer pre { white-space:pre-wrap; word-break:break-word; background:#0c0f14; padding:8px;
                 border-radius:4px; margin:4px 0; }
+  .obs { border:1px solid var(--line); border-radius:4px; margin:6px 0; }
+  .obs > summary { cursor:pointer; padding:5px 7px; }
+  .obsbody { padding:0 7px 7px; }
+  .obs pre { max-height:240px; overflow:auto; }
+  details.raw { margin-top:4px; }
+  details.raw > summary { color:var(--muted); cursor:pointer; }
+  details.raw pre { max-height:360px; overflow:auto; }
   #drawer .close { position:absolute; top:10px; right:12px; background:var(--panel); color:var(--ink);
                    border:1px solid var(--line); border-radius:4px; padding:2px 9px; cursor:pointer; }
   .bar-track { position:relative; height:12px; background:#0c0f14; border-radius:2px; overflow:hidden; }
@@ -86,14 +96,14 @@
   <h1>aranya report <span class="muted" id="meta"></span></h1>
   <div class="controls">
     <div class="ctl" id="ctl-ip"><label for="f-ip">ip</label>
-      <input id="f-ip" list="ip-list" size="14" placeholder="all"><datalist id="ip-list"></datalist></div>
+      <select id="f-ip"></select></div>
     <div class="ctl" id="ctl-q"><label for="f-q">filter</label>
-      <input id="f-q" placeholder="topic/key/value/source"></div>
+      <input id="f-q" placeholder="label/value/source"></div>
     <div class="ctl" id="ctl-state"><label for="f-state">state</label>
       <select id="f-state">
         <option value="">all</option>
         <option value="agree">agree</option><option value="single">single</option>
-        <option value="spread">spread</option><option value="disagree">disagree</option>
+        <option value="spread">set</option><option value="disagree">disagree</option>
         <option value="dissent">dissent</option><option value="multi">multi</option>
         <option value="no_data">no_data</option><option value="error">error</option>
         <option value="skipped">skipped</option><option value="absent">absent</option>
@@ -131,6 +141,9 @@ const TINT = {agree:"rgba(27,94,32,.30)",single:"rgba(91,100,112,.22)",spread:"r
 const GLYPH = {agree:"=",single:"\u00b7",spread:"~",disagree:"\u2260",dissent:"\u00d7",
   multi:"\u2261",no_data:"?",error:"\u2717",skipped:"\u2205",absent:""};
 const VERDICTS = ["agree","single","spread","disagree"];
+const VLABEL = DATA.verdict_labels || {agree:"agree",single:"single",spread:"set",disagree:"disagree"};
+const verdictText = v => VLABEL[v] || v;
+const GROUPS = DATA.claim_groups || {core:"IP facts",routes:"BGP routes",as:"AS",identity:"Identity",latency:"Latency",other:"Other"};
 const STATE_ORDER = ["agree","single","spread","disagree","dissent","multi","error","skipped","no_data","absent"];
 const SEVERITY = {disagree:0, spread:1, agree:2, single:3};
 const TABS = {
@@ -163,11 +176,13 @@ function legend(states){
   for (const st of states){
     const item=el("span","item");
     const sw=el("span","swatch",GLYPH[st]); sw.style.background=COLOR[st];
-    item.append(sw, document.createTextNode(" "+st)); box.append(item);
+    item.append(sw, document.createTextNode(" "+verdictText(st))); box.append(item);
   }
   return box;
 }
-const claimKey = c => c.topic + "." + c.key;
+const claimKey = c => c.topic + "." + c.key;  // internal identity only
+const claimLabel = c => c.label || claimKey(c);
+const claimHeadline = c => c.headline || c.consensus;
 
 function filters(){
   const p=new URLSearchParams(location.hash.replace(/^#/,""));
@@ -187,14 +202,15 @@ function claimMatches(c, f){
   }
   if (f.q){
     const n=f.q.toLowerCase();
-    const blob=(claimKey(c)+" "+c.consensus+" "+c.labels.map(l=>l.label).join(" ")+" "+c.sources.join(" ")).toLowerCase();
+    const blob=(claimLabel(c)+" "+claimKey(c)+" "+claimHeadline(c)+" "+c.labels.map(l=>l.label).join(" ")+" "+c.sources.join(" ")).toLowerCase();
     if (!blob.includes(n)) return false;
   }
   return true;
 }
 function srcMatches(src, f){ return !f.q || src.id.toLowerCase().includes(f.q.toLowerCase()); }
 function sortClaims(list){ return list.slice().sort((a,b)=>
-  (SEVERITY[a.verdict]-SEVERITY[b.verdict]) || claimKey(a).localeCompare(claimKey(b))); }
+  ((a.priority??99999)-(b.priority??99999)) ||
+  (SEVERITY[a.verdict]-SEVERITY[b.verdict]) || claimLabel(a).localeCompare(claimLabel(b)) || claimKey(a).localeCompare(claimKey(b))); }
 function scopeClaims(f, tab){
   if (tab==="claims" || tab==="matrix") return sortClaims((claimsByIp[selectedIP(f)]||[]).filter(c=>claimMatches(c,f)));
   if (tab==="overview") return sortClaims(DATA.claims.filter(c=>claimMatches(c,f)));
@@ -207,26 +223,84 @@ function cellText(c, src, state){
   return GLYPH[state];
 }
 
+function latestFetch(claim, source){
+  let best=null;
+  for (const f of (DATA.fetches||[])){
+    if (f.ip===claim.ip && f.source===source && (!best || f.id>best.id)) best=f;
+  }
+  return best;
+}
+function valueText(value){
+  if (value === null) return "null";
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
 function openDrawer(claim, source){
   const d=document.getElementById("drawer");
   d.replaceChildren();
   const close=el("button","close","✕"); close.addEventListener("click",()=>d.classList.remove("open"));
   d.append(close);
-  d.append(el("h2","", claimKey(claim)+"  ["+claim.verdict+"]"));
+  d.append(el("h2","", claimLabel(claim)+"  ["+verdictText(claim.verdict)+"]"));
+  if (claim.description) d.append(el("div","desc",claim.description));
   d.append(el("div","muted", claim.n_sources+" source(s), "+claim.n_upstreams+" upstream(s); verdict over upstreams"));
-  const cons=el("div",""); cons.append(el("span","muted","consensus: "));
-  cons.append(el("span","val",claim.consensus)); d.append(cons);
+  const cons=el("div",""); cons.append(el("span","muted","summary: "));
+  cons.append(el("span","val",claimHeadline(claim))); d.append(cons);
+  if (claim.explanation) d.append(el("div","muted",claim.explanation));
   for (const lab of claim.labels){
     const row=el("div",""); row.append(el("span","val",lab.label+"  "));
     row.append(el("span","muted","["+lab.sources.join(", ")+"]")); d.append(row);
   }
-  if (claim.multi.length) d.append(el("div","muted","sets: "+claim.multi.join(", ")));
-  const obs=(DATA.observations||[]).filter(o=>o.ip===claim.ip&&o.topic===claim.topic&&o.key===claim.key&&(!source||o.source===source));
-  if (obs.length){ d.append(el("div","muted","observations:")); const pre=el("pre","");
-    pre.textContent=obs.map(o=>o.source+"  "+JSON.stringify(o.value)).join("\n"); d.append(pre); }
-  else d.append(el("div","muted","(re-export with --with-observations for raw values)"));
-  for (const s of claim.sources){ const ft=(DATA.fetches||[]).find(x=>x.ip===claim.ip&&x.source===s);
-    if (ft) d.append(el("pre","", "$ python3 aranya.py --show-fetch "+ft.id)); }
+  for (const s of claim.multi){
+    const labels=claim.source_labels[s]||[];
+    d.append(el("div","muted", s+"*  "+labels.length+" values: "+labels.slice(0,8).join(", ")+(labels.length>8?"…":"")));
+  }
+
+  const observations=(DATA.observations||[]).filter(
+    o=>o.ip===claim.ip && o.topic===claim.topic && o.key===claim.key
+  );
+  const bySource={};
+  for (const o of observations) (bySource[o.source]=bySource[o.source]||[]).push(o);
+  const sources=[...new Set([...(claim.sources||[]), ...Object.keys(bySource), ...(source?[source]:[])])];
+  sources.sort((a,b)=> a===source ? -1 : b===source ? 1 : a.localeCompare(b));
+
+  d.append(el("div","muted","observations:"));
+  if (!observations.length) d.append(el("div","muted","(observations not embedded in this report)"));
+  for (const s of sources){
+    const list=bySource[s]||[];
+    const box=el("details","obs");
+    if (!source || s===source) box.open=true;
+    const summary=el("summary","");
+    summary.append(el("span","val",s+"  "));
+    const state=cellState[claim.ip+"|"+claimKey(claim)+"|"+s];
+    summary.append(el("span","muted",(state?state+" · ":"")+list.length+" observation(s)"));
+    box.append(summary);
+    const body=el("div","obsbody");
+    if (list.length){
+      const first=list[0];
+      const meta=[first.upstream, first.evidence_class, first.observed_at].filter(Boolean).join(" · ");
+      if (meta) body.append(el("div","muted",meta));
+      for (const o of list){
+        const pre=el("pre",""); pre.textContent=valueText(o.value); body.append(pre);
+      }
+    }
+    const ids=[...new Set(list.map(o=>o.fetch_id).filter(id=>id!=null))];
+    let fts=ids.map(id=>(DATA.fetches||[]).find(f=>f.id===id)).filter(Boolean);
+    if (!fts.length){ const ft=latestFetch(claim,s); if (ft) fts=[ft]; }
+    for (const ft of fts){
+      const raw=el("details","raw");
+      raw.append(el("summary","", "raw source · fetch "+ft.id+" · "+(ft.status==null?"?":ft.status)+(ft.error?" · "+ft.error:"")));
+      const endpoint=ft.url||"(no endpoint recorded)";
+      raw.append(el("div","muted", (ft.method?ft.method+" ":"")+endpoint));
+      if (Object.prototype.hasOwnProperty.call(ft,"body") && ft.body !== null){
+        const pre=el("pre",""); pre.textContent=String(ft.body); raw.append(pre);
+      } else {
+        raw.append(el("div","muted","no raw body; $ python3 aranya.py --show-fetch "+ft.id));
+      }
+      body.append(raw);
+    }
+    if (!fts.length) body.append(el("div","muted","no fetch record"));
+    if (!list.length && observations.length) body.append(el("div","muted","(no embedded observations for this source)"));
+    box.append(body); d.append(box);
+  }
   d.classList.add("open");
 }
 
@@ -236,7 +310,7 @@ function renderStrip(f, tab){
   const vc={agree:0,single:0,spread:0,disagree:0};
   for (const c of scope) vc[c.verdict]++;
   for (const v of VERDICTS){
-    const b=el("button","", vc[v]+" "+v);
+    const b=el("button","", vc[v]+" "+verdictText(v));
     b.setAttribute("aria-pressed", f.state===v ? "true":"false");
     b.style.borderLeft="3px solid "+COLOR[v];
     b.addEventListener("click", ()=>{ const nf=filters(); nf.state = nf.state===v ? "" : v; setFilters(nf); });
@@ -255,19 +329,23 @@ function renderClaims(f){
   const list=scopeClaims(f,"claims");
   if (!ip){ host.append(el("p","muted","no data")); return; }
   if (!list.length){ host.append(el("p","muted","no claims match the filter")); return; }
-  host.append(el("p","muted", list.length+" claim(s) for "+ip+"  (* = source reports a set)"));
+  host.append(el("p","muted", list.length+" claim(s) for "+ip));
+  let group="";
   for (const c of list){
+    const claimGroup=c.group||"other";
+    if (claimGroup!==group){ group=claimGroup; host.append(el("h2","group",GROUPS[group]||group)); }
     const details=el("details","card"); const summary=el("summary");
-    summary.append(el("span","name",claimKey(c))); summary.append(chip(c.verdict));
-    const cons=el("span","cons"); cons.append(el("span","val",c.consensus));
+    summary.append(el("span","name",claimLabel(c))); summary.append(chip(c.verdict, verdictText(c.verdict)));
+    const cons=el("span","cons"); cons.append(el("span","val",claimHeadline(c)));
     cons.append(el("span","muted","   "+c.n_sources+" src / "+c.n_upstreams+" up"));
     summary.append(cons); details.append(summary);
     const body=el("div","body");
-    c.labels.forEach((lab,i)=>{ const row=el("div",i===0?"labelrow top":"labelrow");
-      row.append(el("span","val",lab.label+"  "));
-      row.append(el("span","muted",lab.sources.join(", ")+(lab.upstreams.length<lab.sources.length?"  ("+lab.upstreams.length+" up)":"")));
+    const shown=c.labels.slice(0,8);
+    shown.forEach((lab,i)=>{ const row=el("div",i===0?"labelrow top":"labelrow");
+      row.append(el("span","val",lab.label));
       body.append(row); });
-    for (const s of c.multi) body.append(el("div","labelrow","~ "+s+"*  "+(c.counts[s]||0)+" values: "+(c.source_labels[s]||[]).slice(0,4).join(", ")));
+    if (c.labels.length>shown.length)
+      body.append(el("div","labelrow muted","+"+(c.labels.length-shown.length)+" more values; open details / provenance"));
     const btn=el("button","","details / provenance"); btn.addEventListener("click",()=>openDrawer(c));
     body.append(btn); details.append(body); host.append(details);
   }
@@ -281,21 +359,21 @@ function renderMatrix(f){
   if (!claims.length || !sources.length){ host.append(el("p","muted","nothing matches the filter")); return; }
   const visibleSources=sources.filter(s=>claims.some(c=>(cellState[ip+"|"+claimKey(c)+"|"+s.id]||"absent")!=="absent"));
   const contours=claims.filter(c=>visibleSources.some(s=>(cellState[ip+"|"+claimKey(c)+"|"+s.id]||"absent")!=="absent"));
-  host.append(el("p","muted","cell shows a value only when it differs from consensus ("+GLYPH.agree+" = agrees); colour = state. scroll →"));
+  host.append(el("p","muted","cell shows a value only when it differs from the summary ("+GLYPH.agree+" = agrees); colour = state. scroll →"));
   const wrap=el("div","wrap"); const table=el("table","matrix");
   const head=el("tr"); head.append(el("th","claimcol","claim [verdict] consensus"));
   for (const s of visibleSources) head.append(el("th","", s.id));
   table.append(head);
   for (const c of contours){
-    const tr=el("tr"); tr.append(el("th","claimcol", claimKey(c)+"  ["+c.verdict+"]  "+c.consensus));
+    const tr=el("tr"); tr.append(el("th","claimcol", claimLabel(c)+"  ["+verdictText(c.verdict)+"]  "+claimHeadline(c)));
     for (const s of visibleSources){
       const state=cellState[ip+"|"+claimKey(c)+"|"+s.id]||"absent";
       const td=el("td","cell"+(state in {no_data:1,error:1,skipped:1,absent:1}?" gap":""));
       td.textContent=cellText(c,s.id,state);
       td.style.borderLeftColor=COLOR[state]; td.style.background=TINT[state];
-      td.title=s.id+" · "+claimKey(c)+" · "+state+" : "+((c.source_labels[s.id]||[GLYPH[state]]).join(", "));
+      td.title=s.id+" · "+claimLabel(c)+" · "+state+" : "+((c.source_labels[s.id]||[GLYPH[state]]).join(", "));
       td.tabIndex=0; td.setAttribute("role","button");
-      td.setAttribute("aria-label", s.id+" "+claimKey(c)+" "+state);
+      td.setAttribute("aria-label", s.id+" "+claimLabel(c)+" "+state);
       td.addEventListener("click",()=>openDrawer(c,s.id));
       td.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDrawer(c,s.id);} });
       tr.append(td);
@@ -309,19 +387,19 @@ function renderOverview(f){
   const host=document.getElementById("tab-overview"); host.replaceChildren();
   const claims=scopeClaims(f,"overview");
   const keys=[...new Set(claims.map(claimKey))];
-  const keySev={};
-  for (const k of keys){ const c=DATA.claims.find(x=>claimKey(x)===k); keySev[k]=c?SEVERITY[c.verdict]:9; }
-  keys.sort((a,b)=> (keySev[a]-keySev[b]) || a.localeCompare(b));
-  host.append(el("p","muted","rows = IP, cols = claim; cell = consensus value; colour = verdict"));
+  const keySev={}, keyLabel={}, keyPri={};
+  for (const k of keys){ const c=DATA.claims.find(x=>claimKey(x)===k); keySev[k]=c?SEVERITY[c.verdict]:9; keyPri[k]=c?(c.priority??99999):99999; keyLabel[k]=c?claimLabel(c):k; }
+  keys.sort((a,b)=> (keyPri[a]-keyPri[b]) || (keySev[a]-keySev[b]) || keyLabel[a].localeCompare(keyLabel[b]) || a.localeCompare(b));
+  host.append(el("p","muted","rows = IP, cols = claim; cell = summary value; colour = verdict"));
   const wrap=el("div","wrap"); const table=el("table","matrix");
   const head=el("tr"); head.append(el("th","claimcol","ip \\ claim"));
-  for (const k of keys){ const th=el("th","rot"); th.append(el("span","",k)); head.append(th); }
+  for (const k of keys){ const th=el("th","rot"); th.append(el("span","",keyLabel[k])); head.append(th); }
   table.append(head);
   for (const ip of DATA.ips){
     const tr=el("tr"); tr.append(el("th","claimcol",ip));
     for (const k of keys){ const c=claimByKey[ip+"|"+k]; const td=el("td","cell");
-      if (c){ td.textContent=c.consensus; td.style.borderLeftColor=COLOR[c.verdict]; td.style.background=TINT[c.verdict];
-        td.title=ip+" · "+k+" · "+c.verdict+" : "+c.consensus; td.tabIndex=0; td.setAttribute("role","button");
+      if (c){ td.textContent=claimHeadline(c); td.style.borderLeftColor=COLOR[c.verdict]; td.style.background=TINT[c.verdict];
+        td.title=ip+" · "+keyLabel[k]+" · "+verdictText(c.verdict)+" : "+claimHeadline(c); td.tabIndex=0; td.setAttribute("role","button");
         td.addEventListener("click",()=>openDrawer(c));
         td.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDrawer(c);} }); }
       else { td.className="cell gap"; }
@@ -387,7 +465,7 @@ function renderGeo(f){
     sw.style.background=palette[DATA.ips.indexOf(ipx)%palette.length]; item.append(sw,document.createTextNode(" "+ipx)); lg.append(item); }
   host.append(lg);
   if ((DATA.latency||[]).length){
-    host.append(el("p","muted","latency probes (evidence for spread):"));
+    host.append(el("p","muted","latency probes:"));
     const t=el("table","matrix"); const hd=el("tr"); for (const h of ["ip","source","city","avg_rtt","loss"]) hd.append(el("th","",h)); t.append(hd);
     for (const r of DATA.latency){ if (ipSel && r.ip!==ipSel) continue; const tr=el("tr");
       for (const v of [r.ip,r.source,r.city,r.avg_rtt,r.loss]) tr.append(el("td","",String(v))); t.append(tr); }
@@ -399,13 +477,14 @@ const RENDERERS={claims:renderClaims, matrix:renderMatrix, overview:renderOvervi
 function renderAll(){
   const f=filters();
   if (!RENDERERS[f.tab]) f.tab="claims";
+  if (DATA.ips.length && !DATA.ips.includes(f.ip) && f.tab!=="overview") f.ip=DATA.ips[0];
   document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-selected", b.dataset.tab===f.tab ? "true":"false"));
   for (const sec of document.querySelectorAll("main section")) sec.classList.remove("active");
   document.getElementById("tab-"+f.tab).classList.add("active");
   const cfg=TABS[f.tab];
   for (const [name,key] of [["ctl-ip","ip"],["ctl-q","q"],["ctl-state","state"]])
     document.getElementById(name).classList.toggle("disabled", !cfg[key]);
-  document.getElementById("f-ip").value=f.ip;
+  document.getElementById("f-ip").value=f.ip||selectedIP(f)||"";
   document.getElementById("f-q").value=f.q;
   document.getElementById("f-state").value=f.state;
   renderStrip(f,f.tab);
@@ -415,8 +494,10 @@ function init(){
   const meta=document.getElementById("meta");
   if (!DATA){ meta.textContent="— no embedded data (open an exported report)"; return; }
   meta.textContent="· schema v"+DATA.schema_version+" · "+DATA.ips.length+" ip(s) · "+DATA.claims.length+" claims · latest "+(DATA.latest_observation||"?");
-  const dl=document.getElementById("ip-list"); for (const ip of DATA.ips) dl.append(el("option","",ip));
-  document.getElementById("f-ip").addEventListener("input",e=>{ const f=filters(); f.ip=e.target.value.trim(); setFilters(f); });
+  const ipSelect=document.getElementById("f-ip");
+  for (const ip of DATA.ips) ipSelect.append(el("option","",ip));
+  if (!DATA.ips.length) ipSelect.append(el("option","","no data"));
+  ipSelect.addEventListener("change",e=>{ const f=filters(); f.ip=e.target.value; setFilters(f); });
   document.getElementById("f-q").addEventListener("input",e=>{ const f=filters(); f.q=e.target.value; setFilters(f); });
   document.getElementById("f-state").addEventListener("change",e=>{ const f=filters(); f.state=e.target.value; setFilters(f); });
   document.querySelectorAll("#tabs button").forEach(b=>b.addEventListener("click",()=>{ const f=filters(); f.tab=b.dataset.tab; setFilters(f); }));

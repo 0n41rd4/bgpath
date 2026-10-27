@@ -11,14 +11,14 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aranya
-from registry import sources, store
+from registry import parsers, sources, store
 
 RIPE = Path(__file__).parent / "fixtures" / "ripe"
 OTHERS = Path(__file__).parent / "fixtures" / "others"
 
 OPTIONAL = {
     "ipinfo", "shodan.host", "maxmind.geolite2", "maxmind.asn", "dbip.lite",
-    "peeringdb.fac", "peeringdb.ixpfx",
+    "bgproutes.prefix",
 }
 NO_MMDB = {"MAXMIND_DB": "/nonexistent", "MAXMIND_ASN_DB": "/nonexistent", "DBIP_DB": "/nonexistent"}
 
@@ -39,6 +39,8 @@ def make_fetch():
             body = (OTHERS / "cymru.json").read_text()
         elif "api.routeviews.org" in url:
             body = (OTHERS / "routeviews_prefix.json").read_text()
+        elif url.startswith("WHOIS bgp.tools"):
+            body = (OTHERS / "bgp_tools.txt").read_text()
         elif "looking-glass" in url:
             body = (RIPE / "looking-glass.json").read_text()
         elif "atlas.ripe.net" in url:
@@ -86,6 +88,9 @@ class PipelineTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 conn = store.open_store(str(Path(tmp) / "t.db"))
                 statuses, parsed = aranya.run_all(conn, "8.8.8.8", fetch=make_fetch())
+                routeviews = conn.execute(
+                    "SELECT value FROM observations WHERE topic='routing' AND key='routeviews'"
+                ).fetchone()
                 conn.close()
 
         for source_id, status in statuses.items():
@@ -93,16 +98,51 @@ class PipelineTest(unittest.TestCase):
                 self.assertTrue(status.startswith("skipped"), f"{source_id}: {status}")
             else:
                 self.assertEqual(status, "ok", f"{source_id}: {status}")
-        self.assertEqual(statuses["peeringdb.fac[1]"], "ok")
-        self.assertEqual(statuses["peeringdb.ixpfx[128]"], "ok")
+        self.assertEqual(statuses["peeringdb.fac"], "ok")
+        self.assertEqual(statuses["peeringdb.ixpfx"], "ok")
 
         self.assertEqual(parsed["ripestat.network-info"]["asns"], ["15169"])
         self.assertEqual(parsed["peeringdb.net"]["net_id"], 433)
+        self.assertEqual(parsed["peeringdb.fac"]["facilities"][0]["fac_id"], 1)
         self.assertEqual(parsed["rdns.ptr"]["hostname"], "dns.google")
         self.assertEqual(parsed["routeviews.prefix"]["routes"][0]["origin_asn"], 15169)
+        self.assertEqual(parsed["bgp.tools"]["prefix"], "8.8.8.0/24")
+        routeviews_value = json.loads(routeviews[0])
+        self.assertEqual(routeviews_value["prefix"], "8.8.8.0/24")
+        self.assertIn("collectors", routeviews_value)
+        self.assertTrue(routeviews_value["reporting_peers"])
         self.assertEqual(parsed["ris.looking-glass"]["rrcs"][0]["rrc"], "RRC01")
         self.assertEqual(parsed["atlas.ping"]["results"][0]["prb_id"], 1002934)
         self.assertEqual(parsed["irr.origin"]["objects"][0]["origin"], "AS15169")
+
+    def test_bgproutes_fetch_assembly(self):
+        vps = {
+            "data": {
+                "bgp": [
+                    {"id": 1, "source": "bgproutes", "ixp_name": "AMS-IX", "asn": 64500, "status": ["ready"]},
+                    {"id": 2, "source": "ris", "ixp_name": "LINX", "asn": 64501, "status": ["ready"]},
+                    {"id": 3, "source": "routeviews", "ixp_name": "SIX", "asn": 64502, "status": ["ready"]},
+                ]
+            }
+        }
+        rib = {"data": {"bgp": {"1": {"8.8.8.0/24": ["2119 15169", "", None, "V", 1]}}}}
+        calls = []
+
+        def fake_get(path, params, key):
+            calls.append((path, params))
+            return vps if path == "/vantage_points" else rib
+
+        with mock.patch.dict(os.environ, {"BGP_API_KEY": "test-key"}):
+            with mock.patch.object(sources, "_bgproutes_get", side_effect=fake_get):
+                status, body, error = sources._fetch_bgproutes("8.8.8.8", {"prefix": "8.8.8.0/24"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(error)
+        route = parsers.bgproutes(body)["routes"][0]
+        self.assertEqual(route["vp_label"], "AMS-IX AS64500")
+        self.assertEqual(route["as_path"], "2119 15169")
+        self.assertEqual(route["vp_source"], "bgproutes")
+        self.assertEqual(calls[0][1]["sources"], "bgproutes.io")
+        self.assertEqual(calls[1][1]["vp_bgp_ids"], "1,2,3")
 
     def test_optional_sources_configured(self):
         env = {"IPINFO_TOKEN": "test-token", "SHODAN_API_KEY": "test-key", **NO_MMDB}
@@ -218,6 +258,39 @@ class PipelineTest(unittest.TestCase):
             conn.close()
         self.assertEqual(ips, {"2.2.2.2"})
 
+    def test_clear_flag_takes_ip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "t.db")
+            conn = store.open_store(path)
+            store.save_observation(conn, "1.1.1.1", "src", "up", "reported", "t", "k", 1)
+            store.save_observation(conn, "2.2.2.2", "src", "up", "reported", "t", "k", 2)
+            conn.close()
+            with mock.patch.object(sources, "load_env"):
+                self.assertEqual(aranya.main(["--db", path, "--clear", "1.1.1.1"]), 0)
+                self.assertEqual(aranya.main(["--db", path, "--clear"]), 0)
+            conn = store.open_store(path)
+            n = conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+            conn.close()
+        self.assertEqual(n, 0)
+
+    def test_html_fails_when_ip_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "t.db")
+            out = Path(tmp) / "report.html"
+            with mock.patch.object(sources, "load_env"):
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    code = aranya.main(["--db", path, "--html", str(out), "8.8.8.8"])
+        self.assertEqual(code, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("no stored observations for 8.8.8.8", err.getvalue())
+
+    def test_path_subcommand_delegates(self):
+        import paths.__main__ as paths_cli
+
+        with mock.patch.object(paths_cli, "run_path", return_value=0) as run_path:
+            self.assertEqual(aranya.main(["path", "41.222.2.1", "--text"]), 0)
+        run_path.assert_called_once_with(["41.222.2.1", "--text"])
+
     def test_load_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "env"
@@ -276,28 +349,56 @@ class PipelineTest(unittest.TestCase):
             self.assertTrue((dump / "AS15169" / "peeringdb.net" / "output.txt").exists())
             self.assertTrue((dump / "AS15169" / "ripestat.as-overview" / "output.txt").exists())
             self.assertTrue((dump / "AS15169" / "atlas.probes" / "output.txt").exists())
-            self.assertTrue((dump / "AS15169" / "peeringdb.fac" / "1" / "output.txt").exists())
-            self.assertTrue((dump / "AS15169" / "peeringdb.ixpfx" / "128" / "output.txt").exists())
+            self.assertTrue((dump / "AS15169" / "peeringdb.fac" / "output.txt").exists())
+            self.assertTrue((dump / "AS15169" / "peeringdb.ixpfx" / "output.txt").exists())
             self.assertFalse((dump / "peeringdb.net").exists())
             status = (dump / "_status.txt").read_text()
             self.assertIn("AS15169/peeringdb.net", status)
-            self.assertIn("AS15169/peeringdb.fac/1", status)
+            self.assertIn("AS15169/peeringdb.fac/", status)
             self.assertIn("\trouteviews.prefix/", status)
 
-    def test_followups_dedupe(self):
+    def test_followups_are_bulk_and_deduped(self):
         facilities = {"facilities": [{"fac_id": 1}, {"fac_id": 1}, {"fac_id": 2}]}
         ixlans = {"ix": [{"ixlan_id": 7}, {"ixlan_id": 7}, {"ixlan_id": 8}]}
-        self.assertEqual(len(sources._followup_facilities(facilities, {})), 2)
-        self.assertEqual(len(sources._followup_ixlans(ixlans, {})), 2)
+        self.assertEqual(
+            sources._followup_facilities(facilities, {}),
+            [("peeringdb.fac", {"fac_ids": [1, 2]}, None)],
+        )
+        self.assertEqual(
+            sources._followup_ixlans(ixlans, {}),
+            [("peeringdb.ixpfx", {"ixlan_ids": [7, 8]}, None)],
+        )
+
+    def test_peeringdb_bulk_followups(self):
+        calls = []
+        fetch = make_fetch()
+
+        def recording_fetch(url):
+            calls.append(url)
+            return fetch(url)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(str(Path(tmp) / "t.db"))
+            statuses, _ = aranya.run_all(conn, "8.8.8.8", fetch=recording_fetch)
+            conn.close()
+
+        fac = [url for url in calls if "peeringdb.com/api/fac" in url]
+        ixp = [url for url in calls if "peeringdb.com/api/ixpfx" in url]
+        self.assertEqual(len(fac), 1)
+        self.assertEqual(len(ixp), 1)
+        self.assertIn("id__in=", fac[0])
+        self.assertIn("ixlan_id__in=", ixp[0])
+        self.assertEqual(statuses["peeringdb.fac"], "ok")
+        self.assertEqual(statuses["peeringdb.ixpfx"], "ok")
 
     def test_main_prints_followup_statuses(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "t.db")
-            statuses = {"peeringdb.fac[1]": "ok", "routeviews.prefix": "ok"}
+            statuses = {"peeringdb.fac": "ok", "routeviews.prefix": "ok"}
             with mock.patch.object(aranya, "run_all", return_value=(statuses, {})):
                 with contextlib.redirect_stdout(io.StringIO()) as out:
                     self.assertEqual(aranya.main(["--db", path, "8.8.8.8"]), 0)
-        self.assertIn("peeringdb.fac[1]", out.getvalue())
+        self.assertIn("peeringdb.fac", out.getvalue())
 
     def test_missing_dependencies_skip(self):
         def failing_fetch(url):

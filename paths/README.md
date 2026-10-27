@@ -1,226 +1,65 @@
 # aranya/paths — path & topology exploration
 
-How the graph is formed. `python -m paths trace <ip>` runs an active measurement
-(`paths/probe.py` — scamper Paris by default, dublin-traceroute as the
-unprivileged fallback) and stores every flow's answered hops as raw records
-(`paths/store.py`). `paths/graph.py` then builds the **interface layer**
-topologically: the hop at TTL *n* is joined to the next answered hop in the same
-flow, so when several flow IDs hit one router and leave via different next hops
-the result is a diamond (ECMP) rather than a line, and unanswered TTLs become
-**gap edges** instead of being collapsed away. On top of that, `paths/enrich.py`
-runs the symbiotic loop by calling the **source-analysis layer at the aranya
-root** (`query.py`, `bgp.py`) — not the network directly: every hop IP is
-resolved to its origin AS (Cymru/RIPEstat), each AS is expanded with its BGP
-neighbours (RIPEstat) and its facilities/IXPs (PeeringDB), and RouteViews
-announcements for the target prefix add the **announcing IP and the collector's
-own interface IP** as a real BGP **session** between two interfaces (the
-collector node carries lat/lon). Each fact is written to its **own layer** —
-`origin`, `as`, `facility`, `ix`, `session`, `collector` — so a source query
-never rewrites measured topology, only adds nodes/edges or annotates them;
-geographic hints stay attributes, never coordinates baked into the graph.
+`python -m paths trace <ip>` (or `aranya path <ip>`) pings the destination, then
+traceroutes it regardless of the ping result, with **every available tool**:
+scamper, dublin-traceroute, voyage, mtr and traceroute. Each tool is stored as its
+own run, and the default output is an HTML report with **one graph per tool** —
+tools can disagree, so they are never merged.
 
-**IP aliasing** (one IP used by more than one router/AS) is recorded as an
-`aliased_asns` attribute on the interface node: it shows up whenever a hop or an
-announcing IP is attributed to more than one AS. This is the AS-level signal;
-once alias resolution (merging interfaces into machines) lands, the
-interface-level case will be detected too.
+## Flow
 
-## Visualisation
-
-`python -m paths html [run_id] -o paths.html` writes a self-contained page. It is
-scan-centric: **edges are packet traversal only** (the measured hop chain, with
-ECMP branches solid and unanswered-TTL gaps dashed), and cross-layer facts are
-shown by **containment** — hops are grouped into AS boxes, and aliased hops are
-bracketed as a "same machine" box — instead of crossing edges. Hover gives a
-tooltip; click opens a panel with the node/edge attributes and a source-of-truth
-link.
-
-Cross-layer detail is **relevance-filtered, with no extra queries**. Each origin
-AS's PeeringDB IXPs and facilities are already fetched once (cached), so:
-
-- an **inter-AS traversal edge** carries a *suspected handoff*: the **intersection**
-  of the two ASes' IXP (and facility) sets — i.e. where they plausibly interconnect.
-  It is drawn as a coloured chip on the edge (`IX <name>` or `FAC ×n`), and clicking
-  the edge lists the exact IXPs/facilities. If the intersection is empty it says so
-  (likely transit or private interconnect).
-- an **AS box** lists only the *suspected* IXPs/facilities (shared with a scanned
-  neighbour) plus the total count — not the AS's full portfolio (Google's 135
-  facilities collapse to the 3 that matter).
-- a **hop** is matched directly against its AS's PeeringDB peering-LAN IPs
-  (`netixlan` `ipaddr4`/`ipaddr6`); a match is flagged with an IXP dot and named on
-  click. Hops otherwise report their AS, aliased ASes and machine.
-
-All of this reuses the same cached PeeringDB responses, so the intersection and the
-port match cost nothing extra.
-
-## Analysis
-
-`paths/analysis.py` adds two derived, query-free analyses (rendered in the page):
-
-- **TTL trust.** The `ttl` in the graph is the probe TTL at which a hop answered —
-  an active-traceroute inference, per flow (scamper Paris / dublin). It is marked
-  `high` when an IP answers at one TTL across several flows with no preceding gap,
-  `medium` when only one flow saw it or a gap precedes it, and `low` when the same
-  IP answers at different TTLs across flows (path change or an alias). The page
-  draws medium/low hops with a dashed/red border and reports the ICMP reply TTL
-  (from the probe) as a cross-check. Traceroute is the right base tool here;
-  independent confirmation comes from RIPE Atlas / Globalping measurements from
-  other vantages, and middlebox-aware probing (Paris, tracebox) where needed.
-- **Geolocated handoff.** Both endpoint IPs of an inter-AS edge are geolocated with
-  the existing sources (MaxMind/DB-IP → ipwho.is → RIPEstat `geoloc`, cached). If
-  the two locations match (same city, or within ~300 km), the edge is flagged as a
-  local handoff, and any facility of either AS in that city is suspected — in
-  addition to the PeeringDB shared-facility intersection. Suspects carry their
-  method (`shared`, `geo`, or `shared+geo`).
-
-AS boxes show the AS **name** (PeeringDB / RIPEstat) and, when available, the
-number of **RIPE Atlas probes** in that AS by country (`atlas.probes`), i.e.
-evidence that the AS is present where we suspect it.
-
-- **RTT vs geolocation.** Each hop carries `min_rtt_ms`; one-way distance is
-  bounded by `rtt_ms × 100 km` (fiber). A suspected handoff whose geolocated
-  distance exceeds that bound is flagged implausible, and the hop with the
-  largest RTT (the long-haul segment) is marked — if the AS also changes there,
-  that is the real handoff hop, stronger than intersecting facility lists.
-- **BGP advertisement correlation.** RouteViews announcements for the target
-  prefix are grouped per collector (each with coordinates), giving where the
-  prefix is seen and the AS paths there. A suspected facility is supported by
-  `bgp` when a collector where the prefix is seen is within 100 km, or by
-  `bgp-country` when one is in the same country; a facility that is only
-  `geo`-suspected (no shared membership, no BGP reach) is flagged **weak** and
-  can be ruled out. Facility coordinates come from PeeringDB `fac` and IX
-  peering-LAN prefixes from `ixpfx`, fetched only for candidate IXPs/facilities
-  (shared or matching a geolocated hop city) so no run fans out over an AS's
-  full portfolio.
-
-## Layers
-
-| Layer | Node | Edge | Source |
-|---|---|---|---|
-| `interface` | hop IP / announcing IP | hop → next hop (measured) | trace |
-| `origin` | `AS<asn>` | interface → AS | Cymru / RIPEstat / RouteViews |
-| `as` | `AS<neighbour>` | AS → AS | RIPEstat `asn-neighbours` |
-| `session` | — | announcing IP → collector | RouteViews `reporting_peers` |
-| `collector` | `COL:<name>` (interface IP + lat/lon) | — | RouteViews `/collector` |
-| `facility` | `FAC:<name>` | AS → facility | PeeringDB `netfac` |
-| `ix` | `IX:<id>` | AS → IX (carries the AS's peering-LAN `ipaddr4`/`ipaddr6`) | PeeringDB `netixlan` |
-
-## Source-analysis boundary
-
-Reusable source work lives at the aranya root and is imported by `paths/`:
-- `query.py` — generic adapter queries (`fetch_parsed`, `asn_of`, `neighbours`, PeeringDB).
-- `bgp.py` — BGP facts: `announcements`, `prefixes_for_asn`, `owns`, `sessions`, `speaker_asns`.
-
-`paths/` keeps only measurement (`probe.py`), graph construction (`graph.py`,
-alias/ECMP/gap), persistence (`store.py`), and the graph-mutation glue
-(`enrich.py`).
+1. **ping** — `probe.capture_ping` (system `ping -c N -n`), stored in the run meta.
+2. **traceroute** — all available tools, each its own run; `--maxttl` defaults to
+   `32` because long paths often exceed the usual 20. If a trace hits that cap
+   without reaching the target, it is retried **once** at TTL `64` (not `mtr`).
+   `--tools` limits the set, and `ingest` imports previously-captured output.
+3. **graph** — `graph.py` joins each flow's answered hops into an interface
+   topology. Missing TTLs are bridged only within the same flow; edges are never
+   mixed across flows. If one flow has several replies at the same TTL, the best
+   RTT is kept instead of drawing every reply to every next hop. Multiple flows
+   still show ECMP. Replies that never join an observed edge are omitted from the
+   graph but remain in the method's semi-raw log. A failed trace simply ends at
+   its last hop.
+4. **enrich** — `enrich.py` resolves every hop to its origin AS, fetches each
+   AS's PeeringDB facilities/IXPs, and annotates every inter-AS link with a
+   `handoff`: shared facilities/IXPs, whether the outgoing AS advertises the
+   destination (RouteViews), plus peering evidence. For each inter-AS edge it
+   checks whether the two ASes appear contiguous in an observed AS path toward
+   the destination (RouteViews, RIPE RIS, and bgproutes.io vantage points) and
+   whether the two hop IPs are geographically consistent. A link is marked as a
+   **confirmed peering** (green) when adjacency and geography both agree; the
+   details (sources, AS paths, countries, distance) show when clicking the link.
+   The AS-path evidence reuses the same adapters/parsers/cache as `aranya <IP>`
+   via `source/topology.py`.
 
 ## Usage
 
 ```sh
-.venv/bin/python -m paths --db paths.db trace 8.8.8.8 --tool scamper --flows 4 --maxttl 16 --enrich
+.venv/bin/python -m paths --db paths.db trace 41.222.2.1          # all tools -> 41.222.2.1.html
+.venv/bin/python -m paths --db paths.db trace 41.222.2.1 --tools mtr,traceroute
+.venv/bin/python -m paths --db paths.db trace 41.222.2.1 --text   # text summary, no HTML
+.venv/bin/python -m paths --db paths.db ingest mtr.json --tool mtr --target 41.222.2.1
 .venv/bin/python -m paths --db paths.db show
-.venv/bin/python -m paths --db paths.db topology <run_id>
+.venv/bin/python -m paths --db paths.db html --target 41.222.2.1 -o paths.html
+.venv/bin/python -m paths --db paths.db clear   # empty the paths database
+.venv/bin/python -m paths --db paths.db clear 41.222.2.1  # remove one target
+
+aranya path 41.222.2.1                       # same as `trace`, via the aranya CLI
+aranya path 41.222.2.1 --tools scamper,dublin -o paths.html
+aranya path --clear                           # empty the path database
+aranya path --clear 41.222.2.1                # remove just that target
 ```
 
-`--tool dublin` uses dublin-traceroute instead. `networkx` is required for graph
-building (installed in the venv); without it the probe/store/enrich tests still
-run.
+`trace` (and `aranya path`) render HTML by default; `--text` prints the per-run
+text summary instead. Click a method name in the HTML to show its stored
+semi-raw hop log on the right; click a hop for details, or a link for its handoff.
+`html --target` picks the latest run per tool for that target; passing explicit
+run ids stacks those in order. `networkx` is required for graph building;
+`--no-enrich` skips the source-analysis queries.
 
-## Many tools, one graph
+Source-analysis queries are disk-cached (`PATHS_CACHE`, default
+`~/.cache/aranya/paths`; `PATHS_CACHE_TTL`; `--no-cache` to bypass).
 
-A single tool sees one slice of the path. Run several protocols/tools and let them
-aggregate: identical adjacencies collapse into one edge carrying the union of
-`flows`, `protocols` and `tools`, so the graph grows without becoming redundant.
-
-Built-in multi-protocol scamper (Paris), one run:
-
-```sh
-.venv/bin/python -m paths --db paths.db trace 8.8.8.8 --protocols udp,icmp,tcp --flows 3 --enrich
-```
-
-External tools, ingested into the same run (`--run-id` appends, rebuilding the
-interface layer from all hops):
-
-```sh
-mtr -n -j -c 5 8.8.8.8 > mtr.json
-traceroute -n 8.8.8.8 > tr.txt
-.venv/bin/python -m paths --db paths.db ingest mtr.json --tool mtr        --protocol icmp --run-id <id>
-.venv/bin/python -m paths --db paths.db ingest tr.txt  --tool traceroute --protocol udp  --run-id <id>
-```
-
-Use `mtr -n` (or `-b`): mtr's JSON `host` is a display name and carries **no IP
-field**, so without `-n` most hops come back as hostnames/PTR names and can't be
-placed in the graph. The parser recovers an IP from `-b`'s `name (ip)` form and
-falls back to a forward DNS lookup for bare hostnames, but `-n` is the reliable
-choice. `traceroute -n` likewise avoids the same problem (the text parser also
-handles `name (ip)`).
-
-`--tool` accepts `mtr` (JSON), `traceroute` (text), `scamper` (JSON lines),
-`dublin` (JSON) and `voyage` (flat JSON array). Tools worth installing, each
-adding a different vantage on ECMP/middleboxes: `mtr`, `traceroute`,
-`hping3`, `nping`; `scamper` and `dublin-traceroute` are already used. Different
-protocols routinely take different paths (e.g. ICMP vs UDP to 8.8.8.8 hit
-different Google edges), which is exactly the signal aggregation exposes.
-
-**Voyage** (maintained Rust Paris successor, Diamond-Miner multipath) can also be
-run directly:
-
-```sh
-.venv/bin/python -m paths --db paths.db trace 8.8.8.8 --tool voyage --protocols icmp --maxttl 16 --enrich
-```
-
-or its `flat` output ingested like any other tool. Its Diamond Miner discovers
-load-balanced paths, so the interface graph grows into a **DAG**: the graph layer
-connects every hop at TTL *n* to every hop at the next observed TTL within a flow
-(a bipartite fan), turning a load balancer's multiple successors into real
-fan-out/fan-in instead of a single line. Standard single-reply traces are
-unaffected (1×1).
-
-## One row per tool
-
-`paths html <run-id> ...` renders several runs **stacked in rows**, one graph per
-run, so paths from different tools can be compared at a glance — a tool whose
-path diverges from the others is immediately visible:
-
-```sh
-.venv/bin/python -m paths --db paths.db html --target 8.8.8.8 -o paths.html
-```
-
-`--target` picks the latest run per tool for that target and stacks them; passing
-explicit run ids stacks those in order. The panel summarises every row (tool,
-hops/edges, TTL-trust counts) then aggregates the BGP sessions, collectors,
-facilities and IXPs across them. Runs of the same tool that observed the same
-adjacency can instead be merged into one row via `ingest --run-id` (the union of
-flows/protocols/tools collapses to one edge).
-
-## Testing & rate limits
-
-Repeated runs would hammer RIPEstat / PeeringDB / RouteViews, so source-analysis
-responses are cached on disk: `PATHS_CACHE` (dir, default
-`~/.cache/aranya/paths`; `off` to disable) and `PATHS_CACHE_TTL` (seconds,
-default 86400). Enrichment parts switch off per run:
-
-```sh
---no-sessions    # skip RouteViews BGP sessions
---no-peeringdb   # skip PeeringDB facilities/IXPs
---no-neighbours  # skip RIPEstat AS neighbours
---no-alias       # skip rDNS alias resolution
---no-geo         # skip hop geolocation
---no-probes      # skip RIPE Atlas probe counts
---no-cache       # bypass the cache for this run
-```
-
-or with env vars `PATHS_NO_SESSIONS` / `PATHS_NO_PEERINGDB` / `PATHS_NO_NEIGHBOURS`
-/ `PATHS_NO_ALIAS` / `PATHS_NO_GEO` / `PATHS_NO_PROBES` = `1`. A 4-flow scamper trace runs with a 1s wait and 100 pps,
-which cuts it from ~65s to ~10s; enrichment from cache is a few seconds.
-
-## Privileged tools
-
-| Tool | Needs | Status |
-|---|---|---|
-| `scamper` | root (privilege separation) | via `sudo -n scamper` (NOPASSWD rule) |
-| `dublin-traceroute` | `cap_net_raw` | set on the binary; runs unprivileged |
-| `traceroute`, `mtr`, `nping` | none (ICMP ping sockets) | unprivileged |
-| `scapy` (TTL-DNS / custom probes, later) | `CAP_NET_RAW` | privileged: run via `sudo` or setcap a helper |
-| `hping3`, `paris-traceroute`, `tracebox`, `tcpdump` (if added later) | root / `cap_net_raw`(+`cap_net_admin` for capture) | privileged |
+Tools probe differently: `mtr` uses ICMP echo, while scamper, dublin, voyage and
+traceroute default to UDP here. One can reach a target that another's probe type
+is filtered from; the per-tool graphs are deliberately not merged.

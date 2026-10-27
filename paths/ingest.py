@@ -13,7 +13,9 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import shutil
 import socket
+import subprocess
 
 import paths.probe as probe
 
@@ -91,6 +93,9 @@ def parse_mtr(
             continue
         src_ip, name = _mtr_host(hub.get("host"))
         rtt = hub.get("Avg")
+        loss = hub.get("Loss%")
+        if src_ip and loss is not None and float(loss) >= 100:
+            src_ip, rtt = None, None
         hop = _hop(flow_id, hub.get("count"), src_ip, rtt, name, protocol, tool)
         hop["is_last"] = bool(src_ip and dst and src_ip == dst)
         hops.append(hop)
@@ -154,3 +159,27 @@ def ingest_hops(path: str, tool: str, protocol: str | None = None, target: str |
             if hop.get("src_ip") == target:
                 hop["is_last"] = True
     return hops
+
+
+def capture_mtr(target: str, count: int = 5, timeout: int = 120) -> list[dict]:
+    if shutil.which("mtr") is None:
+        raise RuntimeError("mtr not found on PATH")
+    result = subprocess.run(
+        ["mtr", "-n", "-j", "-c", str(count), target],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0 and not result.stdout.strip():
+        raise RuntimeError(result.stderr.strip() or "mtr failed")
+    return parse_mtr(json.loads(result.stdout), protocol="icmp", target=target)
+
+
+def capture_traceroute(target: str, max_ttl: int = 32, timeout: int = 120) -> list[dict]:
+    if shutil.which("traceroute") is None:
+        raise RuntimeError("traceroute not found on PATH")
+    result = subprocess.run(
+        ["traceroute", "-n", "-m", str(max_ttl), target],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0 and not result.stdout.strip():
+        raise RuntimeError(result.stderr.strip() or "traceroute failed")
+    return parse_traceroute(result.stdout, protocol=None, target=target)

@@ -1,9 +1,12 @@
 """Topological graph construction from raw hops.
 
 The interface layer is built from observed adjacency inside each flow: hop at
-TTL n is adjacent to the next answered hop at TTL m>n. Multiple flow IDs hitting
-the same TTL with different replies become a diamond (ECMP) rather than a line.
-Unanswered TTLs are kept as gaps (an edge's ttl span > 1), never invented away.
+TTL n is adjacent to the next answered hop at TTL m>n. Missing TTLs are bridged
+only within the same flow, because that probe traversed the gap; edges are never
+mixed across flows. When one flow has several replies at the same TTL, keep the
+best RTT for that TTL rather than connecting every reply to every next hop; that
+cross-product invents traversals the probe never made. Multiple flows still show
+ECMP.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
     for hop in hops:
         by_flow.setdefault(hop["flow_id"], []).append(hop)
     for flow_id, entries in by_flow.items():
-        levels: dict[int, dict[str, dict]] = {}
+        levels: dict[int, dict] = {}
         for hop in entries:
             if not hop.get("src_ip"):
                 continue
@@ -37,19 +40,17 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
             if hop.get("tool"):
                 data["tools"].add(hop["tool"])
             ttl = hop["ttl"] if hop["ttl"] is not None else 0
-            level = levels.setdefault(ttl, {})
-            previous = level.get(hop["src_ip"])
+            previous = levels.get(ttl)
             if previous is None or (
                 hop["rtt_ms"] is not None and (previous["rtt_ms"] is None or hop["rtt_ms"] < previous["rtt_ms"])
             ):
-                level[hop["src_ip"]] = hop
+                levels[ttl] = hop
         ttls = sorted(levels)
         for a_ttl, b_ttl in zip(ttls, ttls[1:]):
-            span = b_ttl - a_ttl
-            sources = list(levels[a_ttl].values())[:16]
-            for current in list(levels[b_ttl].values())[:16]:
-                for previous in sources:
-                    _add_edge(graph, previous["src_ip"], current["src_ip"], flow_id, current, span)
+            previous, current = levels[a_ttl], levels[b_ttl]
+            if previous["src_ip"] == current["src_ip"]:
+                continue
+            _add_edge(graph, previous["src_ip"], current["src_ip"], flow_id, current, b_ttl - a_ttl)
     return graph
 
 

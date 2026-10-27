@@ -99,6 +99,18 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertEqual(r["name"], "Google LLC")
         self.assertEqual(r["country"], "US")
 
+    def test_bgp_tools(self):
+        r = parsers.bgp_tools(load("bgp_tools.txt"))
+        self.assertEqual(r["asn"], "15169")
+        self.assertEqual(r["prefix"], "8.8.8.0/24")
+        self.assertEqual(r["country"], "US")
+
+    def test_bgproutes(self):
+        r = parsers.bgproutes(load("bgproutes.json"))
+        self.assertEqual(r["routes"][0]["prefix"], "8.8.8.0/24")
+        self.assertEqual(r["routes"][0]["as_path"], "2119 15169")
+        self.assertEqual(r["routes"][0]["vp_label"], "AMS-IX AS64500")
+
     def test_routeviews_prefix(self):
         r = parsers.routeviews_prefix(load("routeviews_prefix.json"))
         prefixes = [route["prefix"] for route in r["routes"]]
@@ -113,25 +125,9 @@ class NonRipeParserTest(unittest.TestCase):
         self.assertIn(("amsix.ams", "398465 1299 15169"), pairs)
         self.assertEqual(len(best["reporting_peers"]), best["peers"])
 
-    def test_routeviews_announcements(self):
-        r = parsers.routeviews_announcements(load("routeviews_announcements.json"))
-        route = r["routes"][0]
-        self.assertEqual(route["prefix"], "8.8.8.0/24")
-        first = route["announcements"][0]
-        self.assertEqual(first["peer_addr"], "80.249.209.192")
-        self.assertEqual(first["peer_asn"], 2119)
-        self.assertEqual(first["as_path"], "2119 15169")
-        self.assertEqual(first["collector"], "amsix.ams")
-
     def test_routeviews_asn(self):
         r = parsers.routeviews_asn('["8.8.8.0/24", "8.8.4.0/24"]')
         self.assertEqual(r["prefixes"], ["8.8.8.0/24", "8.8.4.0/24"])
-
-    def test_routeviews_collector(self):
-        r = parsers.routeviews_collector(load("routeviews_collector.json"))
-        self.assertEqual(r["name"], "amsix.ams")
-        self.assertEqual(r["ipv4"], "80.249.213.84")
-        self.assertAlmostEqual(r["lat"], 52.360607)
 
     def test_atlas_ping(self):
         r = parsers.atlas_ping(load("atlas.json"))

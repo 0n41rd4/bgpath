@@ -10,9 +10,9 @@ import json
 import os
 import sqlite3
 
-import aggregate
 from registry import sources
-import views
+
+from report import aggregate, compare, labels, views
 
 SCHEMA_VERSION = 1
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.html")
@@ -93,7 +93,11 @@ def build(
     for (ip, topic, key), source_values in sorted(cells.items()):
         if not _matches(topic, key, topics):
             continue
-        summary = {"ip": ip, **aggregate.summarize(topic, key, source_values, upstream)}
+        summary = {
+            "ip": ip,
+            "label": labels.claim_name(topic, key),
+            **aggregate.summarize(topic, key, source_values, upstream),
+        }
         claims.append(summary)
         multi = set(summary["multi"])
         present = set(source_values)
@@ -130,11 +134,17 @@ def build(
             "SELECT ip, source, city, country, avg_rtt, min_rtt, loss FROM v_latency" + where, params
         )
     ]
+    fetch_methods = {
+        adapter["id"]: adapter.get("method", "GET") for adapter in sources.SOURCES
+    }
     fetch_index = [
         {"id": fid, "ip": ip, "source": source, "url": url, "status": status,
-         "error": error, "fetched_at": fetched_at}
-        for fid, ip, source, url, status, error, fetched_at in conn.execute(
-            "SELECT id, ip, source, url, status, error, fetched_at FROM fetches" + where, params
+         "error": error, "fetched_at": fetched_at, "body": body,
+         "method": fetch_methods.get(source) or ("GET" if url.startswith("http") else None)}
+        for fid, ip, source, url, status, error, fetched_at, body in conn.execute(
+            "SELECT id, ip, source, url, status, error, fetched_at, body "
+            "FROM fetches" + where + " ORDER BY id",
+            params,
         )
     ]
 
@@ -142,6 +152,8 @@ def build(
     obj = {
         "schema_version": SCHEMA_VERSION,
         "latest_observation": observed_at,
+        "verdict_labels": compare.VERDICT_LABELS,
+        "claim_groups": labels.GROUP_LABELS,
         "ips": ips,
         "sources": _all_sources(conn),
         "claims": claims,

@@ -7,11 +7,10 @@ name = "aranya"
 version = "0.1.0"
 description = "Evidence layer over public internet-infrastructure data"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["networkx"]
 
 [project.optional-dependencies]
 mmdb = ["maxminddb"]
-graph = ["networkx"]
 
 [project.scripts]
 aranya = "aranya:main"
@@ -19,15 +18,5 @@ aranya = "aranya:main"
 [tool.setuptools]
 py-modules = [
     "aranya",
-    "aggregate",
-    "analyze",
-    "bgp",
-    "cache",
-    "compare",
-    "entities",
-    "export",
-    "query",
-    "render",
-    "views",
 ]
-packages = ["registry", "paths"]
+packages = ["registry", "paths", "report", "source"]

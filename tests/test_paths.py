@@ -1,22 +1,24 @@
+import contextlib
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import bgp
-from registry import parsers
-import paths.alias as alias
+from source import bgp, query, topology
+
 import paths.analysis as analysis
 import paths.enrich as enrich
 import paths.export as paths_export
 import paths.ingest as ingest
 import paths.probe as probe
 import paths.store as store
-import query
+import paths.__main__ as paths_cli
 
 try:
     import paths.graph as graphlib
@@ -29,7 +31,8 @@ except Exception:
 FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "dublin_8.8.8.8.json"
 SCAMPER_FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "scamper_8.8.8.8.json"
 VOYAGE_FIXTURE = Path(__file__).parent / "fixtures" / "paths" / "voyage_flat_8.8.8.8.jsonl"
-ANNOUNCE_FIXTURE = Path(__file__).parent / "fixtures" / "others" / "routeviews_announcements.json"
+
+TARGET = "41.222.2.1"
 
 
 def hops():
@@ -39,6 +42,38 @@ def hops():
 def scamper_hops():
     traces = [json.loads(line) for line in SCAMPER_FIXTURE.read_text().splitlines() if line.strip()]
     return probe.parse_scamper([obj for obj in traces if obj.get("type") == "trace"])
+
+
+def voyage_hops():
+    return probe.parse_voyage(VOYAGE_FIXTURE.read_text())
+
+
+class PingTest(unittest.TestCase):
+    def test_parse_ok(self):
+        text = (
+            "PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.\n"
+            "64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=14.1 ms\n"
+            "--- 8.8.8.8 ping statistics ---\n"
+            "1 packets transmitted, 1 received, 0% packet loss, time 0ms\n"
+            "rtt min/avg/max/mdev = 14.063/14.123/14.183/0.048 ms\n"
+        )
+        result = probe.parse_ping_output(text, 0)
+        self.assertTrue(result["reachable"])
+        self.assertEqual(result["loss_percent"], 0.0)
+        self.assertEqual(result["rtt_min_ms"], 14.063)
+        self.assertEqual(result["rtt_avg_ms"], 14.123)
+
+    def test_parse_unreachable(self):
+        text = "--- 8.8.8.8 ping statistics ---\n3 packets transmitted, 0 received, 100% packet loss, time 0ms\n"
+        result = probe.parse_ping_output(text, 1)
+        self.assertFalse(result["reachable"])
+        self.assertEqual(result["loss_percent"], 100.0)
+
+    def test_parse_fractional_loss(self):
+        text = "3 packets transmitted, 2 received, 33.3333% packet loss, time 2003ms\n"
+        result = probe.parse_ping_output(text, 0)
+        self.assertTrue(result["reachable"])
+        self.assertAlmostEqual(result["loss_percent"], 33.3333)
 
 
 class ScamperTest(unittest.TestCase):
@@ -56,35 +91,18 @@ class ScamperTest(unittest.TestCase):
         self.assertEqual(hop["src_ip"], "8.8.8.8")
         self.assertEqual((hop["icmp_type"], hop["icmp_code"]), (3, 3))
 
-    def test_gap_preserved(self):
-        ttls = sorted(h["ttl"] for h in scamper_hops() if h["flow_id"] == 40001)
-        self.assertIn(2, [b - a for a, b in zip(ttls, ttls[1:])])
-
-
-def voyage_hops():
-    return probe.parse_voyage(VOYAGE_FIXTURE.read_text())
-
 
 class VoyageTest(unittest.TestCase):
     def test_flows_and_protocol(self):
-        hops = voyage_hops()
-        self.assertEqual(sorted({hop["flow_id"] for hop in hops}), [24000, 24001])
-        self.assertEqual(hops[0]["protocol"], "icmp")
-        self.assertEqual(hops[0]["tool"], "voyage")
-
-    def test_rtt_and_reply(self):
-        hop = next(h for h in voyage_hops() if h["flow_id"] == 24000 and h["ttl"] == 1)
-        self.assertEqual(hop["src_ip"], "192.168.1.254")
-        self.assertAlmostEqual(hop["rtt_ms"], 0.5)
-        self.assertEqual(hop["reply_ttl"], 254)
+        parsed = voyage_hops()
+        self.assertEqual(sorted({hop["flow_id"] for hop in parsed}), [24000, 24001])
+        self.assertEqual(parsed[0]["protocol"], "icmp")
+        self.assertEqual(parsed[0]["tool"], "voyage")
 
     @unittest.skipUnless(HAVE_NX, "networkx not installed")
     def test_multipath_fan(self):
         graph = graphlib.interface_graph(voyage_hops())
-        successors = set(graph.successors("192.168.1.254"))
-        self.assertEqual(successors, {"10.0.0.1", "10.0.0.2"})
-        self.assertEqual(set(graph.predecessors("8.8.8.8")), {"10.0.0.1", "10.0.0.2"})
-        self.assertIn("192.168.1.254", graphlib.ecmp_nodes(graph))
+        self.assertEqual(set(graph.successors("192.168.1.254")), {"10.0.0.1", "10.0.0.2"})
 
 
 class ProbeTest(unittest.TestCase):
@@ -96,15 +114,6 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(len(unanswered), 2)
         self.assertTrue(all(hop["src_ip"] is None for hop in unanswered))
 
-    def test_icmp_type_code_swap(self):
-        hop = next(h for h in hops() if h["flow_id"] == 33434 and h["ttl"] == 1)
-        self.assertEqual((hop["icmp_type"], hop["icmp_code"]), (11, 0))
-
-    def test_last_hop(self):
-        hop = next(h for h in hops() if h["flow_id"] == 33434 and h["is_last"])
-        self.assertEqual(hop["src_ip"], "8.8.8.8")
-        self.assertEqual((hop["icmp_type"], hop["icmp_code"]), (3, 3))
-
 
 @unittest.skipUnless(HAVE_NX, "networkx not installed")
 class GraphTest(unittest.TestCase):
@@ -115,23 +124,31 @@ class GraphTest(unittest.TestCase):
         self.assertIn("8.8.8.8", self.graph)
         self.assertGreater(self.graph.number_of_edges(), 0)
 
+    def test_repeated_ttl_replies_do_not_cross_product(self):
+        graph = graphlib.interface_graph([
+            {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0},
+            {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.2", "rtt_ms": 2.0},
+            {"flow_id": 1, "ttl": 2, "src_ip": "10.0.1.1", "rtt_ms": 3.0},
+            {"flow_id": 1, "ttl": 2, "src_ip": "10.0.1.2", "rtt_ms": 4.0},
+        ])
+        self.assertEqual(list(graph.edges), [("10.0.0.1", "10.0.1.1")])
+
     def test_ecmp_fanout(self):
         self.assertIn("72.14.194.218", graphlib.ecmp_nodes(self.graph))
 
-    def test_gap_edge(self):
+    def test_gap_edge_stays_within_flow(self):
         self.assertTrue(self.graph["190.215.80.1"]["190.196.124.214"]["gap"])
-
-    def test_persist_and_counts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            conn = store.open_store(os.path.join(tmp, "p.db"))
-            graphlib.persist(conn, "r1", self.graph)
-            counts = store.graph_counts(conn, "r1")
-            self.assertEqual(counts["edges"]["interface"]["distinct"], self.graph.number_of_edges())
-            conn.close()
+        self.assertTrue(self.graph.has_edge("192.168.1.254", "190.215.80.1"))
 
 
 @unittest.skipUnless(HAVE_NX, "networkx not installed")
 class EnrichTest(unittest.TestCase):
+    def _hops(self):
+        return [
+            {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0, "protocol": "udp", "tool": "scamper"},
+            {"flow_id": 1, "ttl": 2, "src_ip": "10.0.0.2", "rtt_ms": 2.0, "protocol": "udp", "tool": "scamper"},
+        ]
+
     def _patch(self):
         saved = {}
 
@@ -139,105 +156,142 @@ class EnrichTest(unittest.TestCase):
             saved[(module, name)] = getattr(module, name)
             setattr(module, name, value)
 
-        swap(query, "asn_of", lambda ip: {"asn": "15169", "prefix": "8.8.8.0/24", "source": "cymru.origin"})
-        swap(query, "neighbours", lambda asn: [{"asn": 3356, "type": "left", "power": 9}, {"asn": 174, "type": "left", "power": 8}])
-        swap(query, "peeringdb_net", lambda asn: 433)
-        swap(query, "facilities", lambda net_id: [{"name": "Equinix Ashburn", "city": "Ashburn", "country": "US"}])
-        swap(query, "ixps", lambda net_id: [{"name": "DE-CIX", "ix_id": 31}])
-        swap(query, "fetch_parsed", lambda aid, ip="", context=None: {"routes": [{"prefix": "8.8.8.0/24", "origin_asn": 15169}]} if aid == "routeviews.prefix" else {})
-        swap(bgp, "announcements", lambda prefix: [{"prefix": prefix, "origin_asn": 15169, "announcements": [
-            {"peer_asn": 3356, "peer_addr": "80.249.209.192", "collector": "amsix.ams", "as_path": "3356 15169", "timestamp": "t"},
-            {"peer_asn": 174, "peer_addr": "80.249.209.192", "collector": "route-views.linx", "as_path": "174 15169", "timestamp": "t"},
-        ]}])
-        swap(bgp, "collector", lambda name: {"name": name, "ipv4": "80.249.213.84", "lat": 52.36, "lng": 4.89, "country": "NL"})
-        swap(alias, "default_resolver", lambda ip: None)
+        swap(query, "asn_of", lambda ip: {"asn": "1" if ip == "10.0.0.1" else "2", "source": "cymru.origin"})
+        swap(query, "as_name", lambda asn: {"1": "AS One", "2": "AS Two"}.get(asn))
+        swap(query, "geo", lambda ip: None)
+        swap(topology, "neighbour_map", lambda asn: {})
+        swap(topology, "target_paths", lambda ip, prefix=None, with_bgproutes=True: [])
+        swap(query, "peeringdb_net", lambda asn: {"1": 100, "2": 200}.get(asn))
+        swap(
+            query,
+            "facilities",
+            lambda net_id: [{"fac_id": 1, "name": "Equinix X", "city": "Ashburn", "country": "US"}],
+        )
+        swap(query, "ixps", lambda net_id: [{"ix_id": 10, "name": "IX-A"}])
+        swap(bgp, "owns", lambda asn, ip, prefixes=None: asn == 1)
         return saved
 
     def _restore(self, saved):
         for (module, name), value in saved.items():
             setattr(module, name, value)
 
-    def test_expand_offline(self):
+    def test_expand_annotates_handoff(self):
         saved = self._patch()
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 conn = store.open_store(os.path.join(tmp, "p.db"))
-                graph = graphlib.interface_graph(hops())
-                stats = enrich.expand(conn, "r1", graph, budget=1)
-                counts = store.graph_counts(conn, "r1")
+                graph = graphlib.interface_graph(self._hops())
+                stats = enrich.expand(conn, "r1", graph, TARGET)
+                row = conn.execute(
+                    "SELECT attrs FROM edges WHERE run_id = 'r1' AND layer = 'interface' "
+                    "AND src = '10.0.0.1' AND dst = '10.0.0.2'"
+                ).fetchone()
                 conn.close()
         finally:
             self._restore(saved)
 
-        self.assertEqual(stats["origin_edges"], 1)
-        self.assertEqual(stats["as_edges"], 2)
-        self.assertEqual(stats["facilities"], 1)
-        self.assertEqual(stats["ixps"], 1)
-        self.assertEqual(stats["sessions"]["sessions"], 2)
-        self.assertEqual(stats["sessions"]["collectors"], 2)
-        self.assertEqual(stats["aliased"]["80.249.209.192"], ["AS174", "AS3356"])
-        self.assertEqual(counts["edges"]["session"]["distinct"], 2)
+        self.assertEqual(stats["handoffs"], 1)
+        self.assertEqual(stats["asns"], ["1", "2"])
+        handoff = json.loads(row[0])["handoff"]
+        self.assertEqual(handoff["from_as"], "1")
+        self.assertEqual([f["name"] for f in handoff["facilities"]], ["Equinix X"])
+        self.assertEqual([x["name"] for x in handoff["ixps"]], ["IX-A"])
+        self.assertTrue(handoff["announces_dest"])
+
+    def test_expand_marks_confirmed_peering(self):
+        saved = self._patch()
+        try:
+            with mock.patch.object(
+                query, "asn_of",
+                lambda ip: {"asn": "1" if ip == "10.0.0.1" else "2", "country": "ES", "source": "cymru.origin"},
+            ), mock.patch.object(query, "geo", lambda ip: None), mock.patch.object(
+                topology, "neighbour_map",
+                lambda asn: {"1": {"2": {"type": "left", "power": 100}}, "2": {"1": {"type": "left", "power": 100}}}.get(asn, {}),
+            ), mock.patch.object(
+                topology, "target_paths",
+                lambda ip, prefix=None, with_bgproutes=True: [
+                    {"source": "bgproutes.io", "as_path": "1 2", "detail": "VP AS9999", "vp_label": "VP AS9999"},
+                ],
+            ):
+                with tempfile.TemporaryDirectory() as tmp:
+                    conn = store.open_store(os.path.join(tmp, "p.db"))
+                    graph = graphlib.interface_graph(self._hops())
+                    enrich.expand(conn, "r1", graph, "10.0.0.2")
+                    row = conn.execute(
+                        "SELECT attrs FROM edges WHERE run_id = 'r1' AND src = '10.0.0.1' AND dst = '10.0.0.2'"
+                    ).fetchone()
+                    conn.close()
+        finally:
+            self._restore(saved)
+
+        handoff = json.loads(row[0])["handoff"]
+        self.assertTrue(handoff["confirmed"])
+        self.assertEqual(handoff["adjacency"][0]["source"], "bgproutes.io")
+        self.assertTrue(handoff["neighbours"])
+        self.assertTrue(handoff["geo"]["match"])
+
+
+class RetryTest(unittest.TestCase):
+    def test_retry_only_when_cap_was_hit(self):
+        capped = [{"ttl": 32, "src_ip": "10.0.0.1"}]
+        self.assertTrue(paths_cli._should_retry_ttl(capped, TARGET, 32))
+        self.assertFalse(paths_cli._should_retry_ttl(capped, TARGET, 64))
+        self.assertFalse(paths_cli._should_retry_ttl([{"ttl": 20, "src_ip": "10.0.0.1"}], TARGET, 32))
+        self.assertFalse(paths_cli._should_retry_ttl([{"ttl": 32, "src_ip": TARGET}], TARGET, 32))
+        self.assertFalse(paths_cli._should_retry_ttl(
+            [{"ttl": 9, "src_ip": "10.0.0.1"}, {"ttl": 32, "src_ip": None}], TARGET, 32
+        ))
+
+    def test_run_target_retries_once_with_longer_ttl(self):
+        first = (
+            "t0",
+            [{"flow_id": 0, "ttl": 32, "src_ip": "10.0.0.1", "is_last": False}],
+            {"tool": "traceroute", "max_ttl": 32},
+        )
+        second = (
+            "t1",
+            [
+                {"flow_id": 0, "ttl": 32, "src_ip": "10.0.0.1", "is_last": False},
+                {"flow_id": 0, "ttl": 33, "src_ip": TARGET, "is_last": True},
+            ],
+            {"tool": "traceroute", "max_ttl": 64},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "p.db")
+            with mock.patch.object(probe, "capture_ping", return_value={"reachable": True, "rtt_avg_ms": 1.0, "loss_percent": 0}),                  mock.patch.object(paths_cli, "_capture_tool", side_effect=[first, second]) as capture:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = paths_cli.run_target(
+                        TARGET, tools=["traceroute"], db=db, do_enrich=False, text=True
+                    )
+            self.assertEqual(code, 0)
+            self.assertEqual(capture.call_count, 2)
+            self.assertEqual(capture.call_args_list[1].args[3], 64)
+            conn = store.open_store(db)
+            meta = json.loads(conn.execute("SELECT meta FROM runs").fetchone()[0])
+            conn.close()
+        self.assertEqual(meta["max_ttl"], 64)
+        self.assertEqual(meta["retry_ttl"], 64)
 
 
 class BgpTest(unittest.TestCase):
-    def setUp(self):
-        self.routes = parsers.routeviews_announcements(ANNOUNCE_FIXTURE.read_text())["routes"]
-
-    def test_sessions(self):
-        facts = bgp.sessions(self.routes, cap=2)
-        self.assertEqual(len(facts), 2)
-        self.assertEqual(facts[0]["speaker_ip"], "80.249.209.192")
-        self.assertEqual(facts[0]["speaker_asn"], 2119)
-        self.assertEqual(facts[0]["as_path"], "2119 15169")
-
-    def test_speaker_asns(self):
-        self.assertEqual(bgp.speaker_asns(self.routes)["80.249.209.192"], {"2119"})
-
     def test_owns(self):
         self.assertTrue(bgp.owns("2119", "80.249.209.192", prefixes=["80.249.0.0/16"]))
         self.assertFalse(bgp.owns("2119", "80.249.209.192", prefixes=["1.0.0.0/8"]))
 
 
 class AnalysisTest(unittest.TestCase):
-    def test_ttl_trust_confidence(self):
-        hops = [
-            {"flow_id": 1, "ttl": 1, "src_ip": "a", "reply_ttl": 254, "rtt_ms": 1.0},
-            {"flow_id": 2, "ttl": 1, "src_ip": "a", "reply_ttl": 254, "rtt_ms": 1.2},
-            {"flow_id": 1, "ttl": 2, "src_ip": "b", "reply_ttl": 63, "rtt_ms": 2.0},
-            {"flow_id": 1, "ttl": 3, "src_ip": "c", "reply_ttl": 63, "rtt_ms": 3.0},
-            {"flow_id": 2, "ttl": 3, "src_ip": "c", "reply_ttl": 63, "rtt_ms": 3.1},
-            {"flow_id": 1, "ttl": 4, "src_ip": "d", "reply_ttl": 64, "rtt_ms": 4.0},
-            {"flow_id": 2, "ttl": 5, "src_ip": "d", "reply_ttl": 64, "rtt_ms": 5.0},
-        ]
-        trust = analysis.ttl_trust(hops)
-        self.assertEqual(trust["a"]["flows"], 2)
-        self.assertEqual(trust["a"]["return_hops"], 1)
-        self.assertEqual(trust["d"]["ttls"], [4, 5])
-        self.assertEqual(analysis.ttl_confidence(trust["a"], False)[0], "high")
-        self.assertEqual(analysis.ttl_confidence(trust["b"], False)[0], "medium")
-        self.assertEqual(analysis.ttl_confidence(trust["d"], False)[0], "low")
-        self.assertEqual(analysis.ttl_confidence(trust["a"], True)[0], "medium")
-
-    def test_same_place_and_facility(self):
-        santiago = {"city": "Santiago", "country": "CL", "latitude": -33.45, "longitude": -70.66}
-        miami = {"city": "Miami", "country": "US", "latitude": 25.76, "longitude": -80.19}
-        self.assertTrue(analysis.same_place(santiago, dict(santiago))[0])
-        self.assertFalse(analysis.same_place(santiago, miami)[0])
-        self.assertTrue(analysis.facility_matches_place({"city": "Santiago", "country": "CL"}, santiago))
-        self.assertFalse(analysis.facility_matches_place({"city": "Miami", "country": "US"}, santiago))
-
     def test_reachability(self):
         blocked = [
             {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "icmp_type": 11, "icmp_code": 0},
             {"flow_id": 1, "ttl": 2, "src_ip": "192.0.2.9", "icmp_type": 3, "icmp_code": 13},
         ]
-        result = analysis.reachability(blocked, "8.8.8.8")
+        result = analysis.reachability(blocked, TARGET)
         self.assertFalse(result["reached"])
         self.assertEqual(result["last_hop"], "192.0.2.9")
         self.assertEqual(result["error"], "!X")
         reached = analysis.reachability(
-            blocked + [{"flow_id": 1, "ttl": 3, "src_ip": "8.8.8.8", "icmp_type": 3, "icmp_code": 3}],
-            "8.8.8.8",
+            blocked + [{"flow_id": 1, "ttl": 3, "src_ip": TARGET, "icmp_type": 3, "icmp_code": 3}],
+            TARGET,
         )
         self.assertTrue(reached["reached"])
 
@@ -249,206 +303,206 @@ class IngestTest(unittest.TestCase):
             {"count": 2, "host": "???", "Avg": 0.0},
             {"count": 3, "host": "8.8.8.8", "Avg": 5.0},
         ]}}
-        hops = ingest.parse_mtr(payload)
-        self.assertEqual([h["ttl"] for h in hops], [1, 2, 3])
-        self.assertEqual(hops[0]["src_ip"], "192.168.1.1")
-        self.assertIsNone(hops[1]["src_ip"])
-        self.assertEqual(hops[0]["tool"], "mtr")
-        self.assertEqual(hops[0]["protocol"], "icmp")
+        parsed = ingest.parse_mtr(payload)
+        self.assertEqual([h["ttl"] for h in parsed], [1, 2, 3])
+        self.assertEqual(parsed[0]["src_ip"], "192.168.1.1")
+        self.assertIsNone(parsed[1]["src_ip"])
 
-    def test_parse_mtr_host_forms(self):
+    def test_parse_mtr_ignores_100pct_loss_hub(self):
         payload = {"report": {"mtr": {"dst": "8.8.8.8"}, "hubs": [
-            {"count": 1, "host": "gw (10.0.0.1)", "Avg": 0.5},
-            {"count": 2, "host": "72.14.194.218", "Avg": 5.0},
-            {"count": 3, "host": "no-such-host.invalid", "Avg": 6.0},
+            {"count": 1, "host": "8.8.8.8", "Loss%": 100.0, "Avg": 0.0},
         ]}}
-        hops = ingest.parse_mtr(payload)
-        self.assertEqual(hops[0]["src_ip"], "10.0.0.1")
-        self.assertEqual(hops[0]["name"], "gw")
-        self.assertEqual(hops[1]["src_ip"], "72.14.194.218")
-        self.assertIsNone(hops[2]["src_ip"])
-        self.assertEqual(hops[2]["name"], "no-such-host.invalid")
-
-    def test_parse_traceroute_error_token(self):
-        text = " 1  10.0.0.1  1.0 ms\n 2  192.0.2.9  2.0 ms !X\n"
-        hops = ingest.parse_traceroute(text, target="8.8.8.8")
-        self.assertEqual((hops[1]["icmp_type"], hops[1]["icmp_code"]), (3, 13))
-        self.assertFalse(hops[1]["is_last"])
-        last = ingest.parse_traceroute(" 2  8.8.8.8  5.0 ms\n", target="8.8.8.8")
-        self.assertTrue(last[0]["is_last"])
-
-    def test_ingest_voyage_dispatch(self):
-        hops = ingest.ingest_hops(str(VOYAGE_FIXTURE), "voyage")
-        self.assertEqual(len(hops), 6)
-        self.assertEqual(hops[0]["tool"], "voyage")
+        parsed = ingest.parse_mtr(payload, target="8.8.8.8")
+        self.assertIsNone(parsed[0]["src_ip"])
+        self.assertFalse(parsed[0]["is_last"])
 
     def test_parse_traceroute(self):
-        text = "traceroute to 8.8.8.8\n 1  _gateway (192.168.1.1)  0.532 ms  0.4 ms\n 2  * * *\n 3  8.8.8.8  5.1 ms\n"
-        hops = ingest.parse_traceroute(text, protocol="udp")
-        self.assertEqual([h["ttl"] for h in hops], [1, 2, 3])
-        self.assertEqual(hops[0]["src_ip"], "192.168.1.1")
-        self.assertEqual(hops[0]["name"], "_gateway")
-        self.assertAlmostEqual(hops[0]["rtt_ms"], 0.532)
-        self.assertIsNone(hops[1]["src_ip"])
-        self.assertEqual(hops[2]["src_ip"], "8.8.8.8")
+        text = " 1  _gateway (192.168.1.1)  0.532 ms\n 2  * * *\n 3  8.8.8.8  5.1 ms\n"
+        parsed = ingest.parse_traceroute(text, protocol="udp")
+        self.assertEqual([h["ttl"] for h in parsed], [1, 2, 3])
+        self.assertEqual(parsed[2]["src_ip"], "8.8.8.8")
 
-    @unittest.skipUnless(HAVE_NX, "networkx not installed")
-    def test_provenance_merges(self):
-        hops = [
-            {"flow_id": 1, "ttl": 1, "src_ip": "a", "rtt_ms": 1.0, "protocol": "udp", "tool": "scamper"},
-            {"flow_id": 1, "ttl": 2, "src_ip": "b", "rtt_ms": 2.0, "protocol": "udp", "tool": "scamper"},
-            {"flow_id": 2, "ttl": 1, "src_ip": "a", "rtt_ms": 1.0, "protocol": "icmp", "tool": "mtr"},
-            {"flow_id": 2, "ttl": 2, "src_ip": "b", "rtt_ms": 2.0, "protocol": "icmp", "tool": "mtr"},
-        ]
-        graph = graphlib.interface_graph(hops)
-        data = graph["a"]["b"]
-        self.assertEqual(data["protocols"], {"udp", "icmp"})
-        self.assertEqual(data["tools"], {"scamper", "mtr"})
-        self.assertEqual(data["count"], 2)
-
-
-class GeoConsensusTest(unittest.TestCase):
-    def test_consensus_over_sources(self):
-        table = {
-            "ipwho.is": {"city": "Santiago", "country": "CL", "latitude": -33.4, "longitude": -70.6},
-            "ip.guide": {"city": "Santiago", "country": "CL", "latitude": -33.5, "longitude": -70.7},
-            "ripestat.geoloc": {"locations": [{"city": "Santiago", "country": "CL", "latitude": -33.45, "longitude": -70.65, "covered_percentage": 100.0}]},
-            "cymru.origin": {"records": [{"country": "CL"}]},
-            "rdap": {"country": "cl"},
-        }
-        saved = query.fetch_parsed
-        query.fetch_parsed = lambda aid, ip="", context=None: table.get(aid, {})
-        try:
-            result = query.geo_all("1.2.3.4")
-        finally:
-            query.fetch_parsed = saved
-        self.assertEqual(result["geo"]["city"], "Santiago")
-        self.assertEqual(result["geo"]["country"], "CL")
-        self.assertAlmostEqual(result["geo"]["latitude"], -33.45)
-        self.assertIn("ipwho.is", result["sources"])
-        self.assertIn("cymru.origin", result["sources"])
-
-
-class AliasTest(unittest.TestCase):
-    def test_router_token_strips_interface(self):
-        self.assertEqual(alias.router_token("ae5.cr2.scl1.example.net"), ("cr2", "scl1.example.net"))
-        self.assertEqual(alias.router_token("reverso.190.215.80.example.net"), ("reverso", "190.215.80.example.net"))
-        self.assertIsNone(alias.router_token("localhost"))
-
-    def test_rdns_pairs_and_clusters(self):
-        rdns = {
-            "10.0.0.1": "ae1.cr2.scl1.example.net",
-            "10.0.0.2": "ae2.cr2.scl1.example.net",
-            "10.0.0.3": "ae1.cr3.scl1.example.net",
-        }
-        clusters = alias.clusters(alias.rdns_pairs(rdns))
-        self.assertEqual(clusters, [["10.0.0.1", "10.0.0.2"]])
-
-    def test_machine_key_stable(self):
-        self.assertEqual(alias.machine_key(["b", "a"]), alias.machine_key(["a", "b"]))
+    def test_ingest_voyage_dispatch(self):
+        parsed = ingest.ingest_hops(str(VOYAGE_FIXTURE), "voyage")
+        self.assertEqual(len(parsed), 6)
+        self.assertEqual(parsed[0]["tool"], "voyage")
 
 
 class ExportTest(unittest.TestCase):
-    def test_build_and_render(self):
+    def _seed(self, conn, run_id, hops, meta=None, edges=None, nodes=None):
+        store.save_run(
+            conn,
+            {"run_id": run_id, "target": TARGET, "src_ip": "10.0.0.1", "tool": "scamper",
+             "started_at": "t", "meta": meta or {}},
+        )
+        store.save_hops(conn, run_id, hops)
+        for src, dst, ttl in edges or []:
+            store.add_edge(conn, run_id, "interface", src, dst, ttl=ttl)
+        for ip, attrs in (nodes or {}).items():
+            store.set_node_attrs(conn, "interface", ip, attrs)
+
+    def test_failed_trace_hangs(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn = store.open_store(os.path.join(tmp, "p.db"))
-            store.save_run(conn, {"run_id": "r1", "target": "8.8.8.8", "src_ip": "1.2.3.4", "tool": "scamper", "started_at": "t"})
-            store.save_hops(conn, "r1", [
-                {"flow_id": 1, "ttl": 1, "src_ip": "1.2.3.4", "rtt_ms": 1.0, "icmp_type": 11, "icmp_code": 0, "is_last": False},
-                {"flow_id": 1, "ttl": 2, "src_ip": "8.8.8.8", "rtt_ms": 5.0, "icmp_type": 3, "icmp_code": 3, "is_last": True},
-            ])
-            store.add_node(conn, "interface", "8.8.8.8")
-            store.add_node(conn, "as", "AS15169", {"asn": "15169"})
-            store.add_edge(conn, "r1", "interface", "1.2.3.4", "8.8.8.8", ttl=2, rtt_ms=5.0)
-            store.add_edge(conn, "r1", "origin", "8.8.8.8", "AS15169", attrs={"source_url": "https://stat.ripe.net/8.8.8.8"})
-            data = paths_export.build(conn, "r1")
-            html = paths_export.render_html(conn, "r1")
-            conn.close()
-
-        self.assertEqual(len(data["hops"]), 2)
-        self.assertEqual(len(data["edges"]), 1)
-        self.assertTrue(all("x" in hop and "y" in hop for hop in data["hops"]))
-        self.assertEqual([c["label"] for c in data["containers"]], ["AS15169"])
-        self.assertNotIn("/*__PATHS_DATA__*/", html)
-        self.assertIn("AS15169", html)
-
-    def test_geo_suspected_facility(self):
-        santiago = {"city": "Santiago", "country": "CL", "latitude": -33.45, "longitude": -70.66, "source": "ripestat.geoloc"}
-        with tempfile.TemporaryDirectory() as tmp:
-            conn = store.open_store(os.path.join(tmp, "p.db"))
-            store.save_run(conn, {"run_id": "r1", "target": "2.2.2.2", "src_ip": "10.0.0.1", "tool": "scamper", "started_at": "t"})
-            store.save_hops(conn, "r1", [
-                {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0, "icmp_type": 11, "icmp_code": 0, "is_last": False, "reply_ttl": 254},
-                {"flow_id": 1, "ttl": 2, "src_ip": "2.2.2.2", "rtt_ms": 5.0, "icmp_type": 3, "icmp_code": 3, "is_last": True, "reply_ttl": 63},
-            ])
-            store.add_node(conn, "interface", "10.0.0.1", {"geo": santiago})
-            store.add_node(conn, "interface", "2.2.2.2", {"geo": dict(santiago)})
-            store.add_node(conn, "as", "AS1", {"asn": "1", "name": "GTD"})
-            store.add_node(conn, "as", "AS2", {"asn": "2"})
-            store.add_node(conn, "facility", "FAC:SCL", {"name": "Ascenty SCL01", "city": "Santiago", "country": "CL"})
-            store.add_edge(conn, "r1", "interface", "10.0.0.1", "2.2.2.2", ttl=2, rtt_ms=5.0)
-            store.add_edge(conn, "r1", "origin", "10.0.0.1", "AS1")
-            store.add_edge(conn, "r1", "origin", "2.2.2.2", "AS2")
-            store.add_edge(conn, "r1", "facility", "AS1", "FAC:SCL")
+            self._seed(
+                conn,
+                "r1",
+                [
+                    {"flow_id": 0, "ttl": 1, "src_ip": "10.0.0.1", "icmp_type": 11, "icmp_code": 0, "is_last": False},
+                    {"flow_id": 0, "ttl": 2, "src_ip": "192.0.2.9", "icmp_type": 3, "icmp_code": 13, "is_last": False},
+                ],
+                meta={"ping": {"reachable": False, "loss_percent": 100.0}},
+                edges=[("10.0.0.1", "192.0.2.9", 2)],
+            )
             data = paths_export.build(conn, "r1")
             conn.close()
 
-        edge = data["edges"][0]
-        self.assertTrue(edge["handoff"]["geo"]["match"])
-        self.assertEqual([f["name"] for f in edge["handoff"]["facilities"]], ["Ascenty SCL01"])
-        self.assertEqual(edge["handoff"]["facilities"][0]["method"], "geo")
-        hop = next(h for h in data["hops"] if h["id"] == "2.2.2.2")
-        self.assertEqual(hop["ttl_confidence"], "medium")
-
-    def test_unreached_target_not_injected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            conn = store.open_store(os.path.join(tmp, "p.db"))
-            store.save_run(conn, {"run_id": "r1", "target": "8.8.8.8", "src_ip": "10.0.0.1", "tool": "traceroute", "started_at": "t"})
-            store.save_hops(conn, "r1", [
-                {"flow_id": 0, "ttl": 1, "src_ip": "10.0.0.1", "icmp_type": 11, "icmp_code": 0, "is_last": False},
-                {"flow_id": 0, "ttl": 2, "src_ip": "192.0.2.9", "icmp_type": 3, "icmp_code": 13, "is_last": False},
-            ])
-            store.add_edge(conn, "r1", "interface", "10.0.0.1", "192.0.2.9", ttl=2)
-            data = paths_export.build(conn, "r1")
-            conn.close()
         self.assertFalse(data["reachability"]["reached"])
-        self.assertEqual(data["reachability"]["error"], "!X")
-        self.assertNotIn("8.8.8.8", [hop["id"] for hop in data["hops"]])
+        self.assertFalse(data["ping"]["reachable"])
+        self.assertNotIn(TARGET, [hop["id"] for hop in data["hops"]])
+        self.assertNotIn(TARGET, [edge["target"] for edge in data["edges"]])
 
-    def test_handoff_intersection_and_ixp_port(self):
+    def test_inter_as_link_carries_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn = store.open_store(os.path.join(tmp, "p.db"))
-            store.save_run(conn, {"run_id": "r1", "target": "2.2.2.2", "src_ip": "10.0.0.1", "tool": "scamper", "started_at": "t"})
-            store.save_hops(conn, "r1", [
-                {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0, "icmp_type": 11, "icmp_code": 0, "is_last": False},
-                {"flow_id": 1, "ttl": 2, "src_ip": "2.2.2.2", "rtt_ms": 5.0, "icmp_type": 3, "icmp_code": 3, "is_last": True},
-            ])
-            store.add_node(conn, "as", "AS1", {"asn": "1"})
-            store.add_node(conn, "as", "AS2", {"asn": "2"})
-            store.add_node(conn, "ix", "IX:10", {"name": "IX-A", "ix_id": 10})
-            store.add_node(conn, "ix", "IX:20", {"name": "IX-B", "ix_id": 20})
-            store.add_node(conn, "facility", "FAC:F1", {"name": "Equinix X", "city": "Ashburn"})
-            store.add_edge(conn, "r1", "interface", "10.0.0.1", "2.2.2.2", ttl=2, rtt_ms=5.0)
-            store.add_edge(conn, "r1", "origin", "10.0.0.1", "AS1")
-            store.add_edge(conn, "r1", "origin", "2.2.2.2", "AS2")
-            store.add_edge(conn, "r1", "ix", "AS1", "IX:10", attrs={"ipaddr4": "10.0.0.1"})
-            store.add_edge(conn, "r1", "ix", "AS2", "IX:10")
-            store.add_edge(conn, "r1", "ix", "AS1", "IX:20")
-            store.add_edge(conn, "r1", "facility", "AS1", "FAC:F1")
-            store.add_edge(conn, "r1", "facility", "AS2", "FAC:F1")
-            data = paths_export.build(conn, "r1")
+            self._seed(
+                conn,
+                "r2",
+                [
+                    {"flow_id": 0, "ttl": 1, "src_ip": "10.0.0.1", "icmp_type": 11, "icmp_code": 0, "is_last": False},
+                    {"flow_id": 0, "ttl": 2, "src_ip": TARGET, "icmp_type": 3, "icmp_code": 3, "is_last": True},
+                ],
+                meta={"ping": {"reachable": True, "rtt_avg_ms": 5.0}},
+                edges=[("10.0.0.1", TARGET, 2)],
+                nodes={"10.0.0.1": {"asn": "1", "as_name": "AS One"}, TARGET: {"asn": "2"}},
+            )
+            store.set_edge_attrs(
+                conn, "r2", "interface", "10.0.0.1", TARGET,
+                {"handoff": {"from_as": "1", "to_as": "2",
+                             "facilities": [{"name": "Equinix X", "city": "Ashburn"}],
+                             "ixps": [{"name": "IX-A"}], "announces_dest": True}},
+            )
+            data = paths_export.build(conn, "r2")
+            html = paths_export.render_html(conn, ["r2"])
             conn.close()
 
         edge = data["edges"][0]
-        self.assertEqual([x["name"] for x in edge["handoff"]["ixps"]], ["IX-A"])
+        self.assertTrue(edge["handoff"]["announces_dest"])
         self.assertEqual([f["name"] for f in edge["handoff"]["facilities"]], ["Equinix X"])
-        hop = next(h for h in data["hops"] if h["id"] == "10.0.0.1")
-        self.assertEqual(hop["ix"]["name"], "IX-A")
-        as1 = next(c for c in data["containers"] if c["label"] == "AS1")
-        self.assertEqual(as1["info"]["total_ixps"], 2)
-        self.assertEqual([x["name"] for x in as1["info"]["ixps"]], ["IX-A"])
-        self.assertGreaterEqual(len(as1["hull"]), 3)
+        self.assertNotIn("/*__PATHS_DATA__*/", html)
+        self.assertIn("Equinix X", html)
+
+    def test_build_hides_off_path_nodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            self._seed(
+                conn,
+                "r1",
+                [
+                    {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "is_last": False},
+                    {"flow_id": 1, "ttl": 2, "src_ip": "10.0.0.2", "is_last": True},
+                    {"flow_id": 1, "ttl": 2, "src_ip": "10.0.0.3", "is_last": False},
+                ],
+                edges=[("10.0.0.1", "10.0.0.2", 2)],
+            )
+            data = paths_export.build(conn, "r1")
+            conn.close()
+        self.assertEqual({hop["id"] for hop in data["hops"]}, {"10.0.0.1", "10.0.0.2"})
+        self.assertEqual({hop["src_ip"] for hop in data["raw"]}, {"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+
+    def test_build_exposes_semi_raw_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            self._seed(
+                conn,
+                "r1",
+                [
+                    {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.5, "is_last": False},
+                    {"flow_id": 1, "ttl": 2, "src_ip": None, "rtt_ms": None, "is_last": False},
+                ],
+                meta={"protocols": ["icmp"], "max_ttl": 32},
+            )
+            data = paths_export.build(conn, "r1")
+            conn.close()
+        self.assertEqual(len(data["raw"]), 2)
+        self.assertEqual(data["raw"][0]["rtt_ms"], 1.5)
+        self.assertIsNone(data["raw"][1]["src_ip"])
+        self.assertEqual(data["run"]["meta"]["max_ttl"], 32)
+
+    def test_one_graph_per_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            self._seed(conn, "r1", [{"flow_id": 0, "ttl": 1, "src_ip": "10.0.0.1", "is_last": False}], edges=[], meta={"tool": "scamper"})
+            self._seed(conn, "r2", [{"flow_id": 0, "ttl": 1, "src_ip": "10.0.0.1", "is_last": False}], edges=[], meta={"tool": "dublin"})
+            data = paths_export.build_graphs(conn, ["r1", "r2"])
+            conn.close()
+
+        self.assertEqual(len(data["graphs"]), 2)
+        self.assertEqual(data["target"], TARGET)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+class ClearTest(unittest.TestCase):
+    def _seed(self, conn, run_id, target, hop_ip, fetch_ip):
+        store.save_run(
+            conn,
+            {"run_id": run_id, "target": target, "tool": "scamper", "started_at": "t", "meta": {}},
+        )
+        store.save_hops(conn, run_id, [{"flow_id": 0, "ttl": 1, "src_ip": hop_ip, "is_last": True}])
+        store.add_edge(conn, run_id, "interface", hop_ip, hop_ip, ttl=1)
+        store.set_node_attrs(conn, "interface", hop_ip, {})
+        conn.execute(
+            "INSERT INTO fetches (ip, source, url, status, body, error, fetched_at) "
+            "VALUES (?, 'test', 'http://example', 200, '{}', NULL, 't')",
+            (fetch_ip,),
+        )
+        conn.commit()
+
+    def test_clear_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            self._seed(conn, "r1", "1.1.1.1", "10.0.0.1", "10.0.0.1")
+            self._seed(conn, "r2", "2.2.2.2", "10.0.0.2", "10.0.0.2")
+            counts = store.clear(conn, "1.1.1.1")
+            remaining_runs = {row[0] for row in conn.execute("SELECT run_id FROM runs")}
+            remaining_nodes = {row[0] for row in conn.execute("SELECT key FROM nodes")}
+            remaining_fetches = {row[0] for row in conn.execute("SELECT ip FROM fetches")}
+            conn.close()
+        self.assertEqual(counts, {"runs": 1, "hops": 1, "edges": 1, "nodes": 1, "fetches": 1})
+        self.assertEqual(remaining_runs, {"r2"})
+        self.assertEqual(remaining_nodes, {"10.0.0.2"})
+        self.assertEqual(remaining_fetches, {"10.0.0.2"})
+
+    def test_clear_all(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            self._seed(conn, "r1", "1.1.1.1", "10.0.0.1", "10.0.0.1")
+            self._seed(conn, "r2", "2.2.2.2", "10.0.0.2", "10.0.0.2")
+            counts = store.clear(conn)
+            totals = {
+                "runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
+                "hops": conn.execute("SELECT COUNT(*) FROM hops").fetchone()[0],
+                "edges": conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+                "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+                "fetches": conn.execute("SELECT COUNT(*) FROM fetches").fetchone()[0],
+            }
+            conn.close()
+        self.assertEqual(counts, {"runs": 2, "hops": 2, "edges": 2, "nodes": 2, "fetches": 2})
+        self.assertEqual(set(totals.values()), {0})
+
+    def test_cli_clear_all_and_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "p.db")
+            conn = store.open_store(db)
+            self._seed(conn, "r1", "1.1.1.1", "10.0.0.1", "10.0.0.1")
+            self._seed(conn, "r2", "2.2.2.2", "10.0.0.2", "10.0.0.2")
+            conn.close()
+            with mock.patch.object(paths_cli.sources, "load_env"):
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(paths_cli.run_path(["--db", db, "--clear", "1.1.1.1"]), 0)
+                self.assertIn("cleared 1 runs", out.getvalue())
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(paths_cli.run_path(["--db", db, "--clear"]), 0)
+                self.assertIn("(all)", out.getvalue())

@@ -5,12 +5,24 @@ source's value and classify how the sources line up. No scoring or merging;
 it only surfaces where sources agree or disagree.
 
 Verdicts:
-  agree    one distinct value (all sources, or a single source)
-  spread   several distinct values, all from one source (e.g. anycast claims)
-  disagree several distinct values from more than one source
+  agree    one value, backed by multiple independent upstreams
+  single   one value from one upstream
+  spread   several values, all from one upstream (displayed as "set")
+  disagree several values from more than one upstream
 """
 
 from __future__ import annotations
+
+VERDICT_LABELS = {
+    "agree": "agree",
+    "single": "single",
+    "spread": "set",
+    "disagree": "disagree",
+}
+
+
+def verdict_label(verdict: str) -> str:
+    return VERDICT_LABELS.get(verdict, verdict)
 
 
 def group(conn, ip: str) -> dict[tuple[str, str], dict[str, set[str]]]:

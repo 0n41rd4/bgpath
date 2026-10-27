@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aranya
-import compare
+from report import compare
 from registry import store
 from test_pipeline import make_fetch
 
@@ -20,6 +20,10 @@ class ClassifyTest(unittest.TestCase):
 
     def test_disagree(self):
         self.assertEqual(compare.classify({"x": {"a"}, "y": {"b"}}), "disagree")
+
+    def test_spread_is_displayed_as_set(self):
+        self.assertEqual(compare.verdict_label("spread"), "set")
+        self.assertEqual(compare.verdict_label("disagree"), "disagree")
 
 
 class CompareTest(unittest.TestCase):

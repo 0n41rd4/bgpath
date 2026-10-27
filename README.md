@@ -19,17 +19,20 @@ aranya 8.8.8.8 [--db FILE]                     # fetch all sources, print observ
 aranya 8.8.8.8 --dump                          # per-source raw output; dumps/last -> latest timestamp
 aranya 8.8.8.8 -v                              # per-source progress on stderr
 aranya --ips 8.8.8.8,1.1.1.1 --dump            # one timestamp folder, one subfolder per IP
+aranya path 8.8.8.8                            # ping + traceroute (all tools) -> HTML report
+aranya path --clear                            # empty the path database
+aranya path --clear 8.8.8.8                    # remove just that target's path runs
 aranya --update-dbs                            # refresh the MaxMind/DB-IP .mmdb files
 aranya --clear                                 # empty the whole database and exit
-aranya --clear-ip 8.8.8.8                      # empty just that IP and exit
-python3 -m unittest discover -s tests          # 130 tests, fully offline
+aranya --clear 8.8.8.8                         # empty just that IP and exit
+python3 -m unittest discover -s tests          # 107 tests, fully offline
 ```
 
 Each dump source folder contains `output.txt` (raw body), `raw_output.json`
 (the body as JSON; non-JSON bodies are wrapped as `{"raw": ...}`), and
-`output.json` (status, URL, parsed observations). AS-scoped sources live under
-`AS<asn>/`; PeeringDB facility and IX follow-ups add a per-ID subfolder
-(`AS15169/peeringdb.fac/1/`, `AS15169/peeringdb.ixpfx/128/`).
+`output.json` (status, URL, parsed payload). AS-scoped sources live under
+`AS<asn>/`; PeeringDB facility and IX details are fetched in bulk and stored
+under `AS<asn>/peeringdb.fac/` and `AS<asn>/peeringdb.ixpfx/`.
 
 Re-running an IP replaces that source's observations, so views do not accumulate
 duplicates; `fetches` are kept as raw history. `--clear` and `--clear-ip` remove
@@ -42,81 +45,69 @@ automatically; pass `--db ./aranya.db` or move it into place.
 
 `python3 aranya.py ...` still works from the checkout.
 
-## Views
+## Report
 
-Disagreement is the signal, not an error: the views keep every source's claim
-side by side and rank them rather than collapsing to one answer.
+Disagreement is the signal, not an error: the report keeps every source's claim
+side by side and ranks them rather than collapsing to one answer.
 
 ```sh
-python3 aranya.py 8.8.8.8 --view               # per-IP claims (no fetch)
-python3 aranya.py 8.8.8.8 --view --normalize   # compare canonical values
-python3 aranya.py 8.8.8.8 --entities           # resolved ownership entity + aliases
-python3 aranya.py --report                     # cross-IP overview + agreement profile
-python3 aranya.py --report --normalize         # ... over canonical values
-python3 aranya.py --stats                      # cross-IP analysis (contested claims, anycast, sources)
-python3 aranya.py --stats 8.8.8.8              # analysis scoped to one IP
+python3 aranya.py 8.8.8.8 --report     # facts + contested claims for one IP (no fetch)
+python3 aranya.py --report             # all stored IPs in one comparison table
+python3 aranya.py --report --ips 8.8.8.8,1.1.1.1
+python3 aranya.py 8.8.8.8 --entities   # ownership entity + aliases
 ```
 
-`--view` prints one block per `topic.key`, coloured by claim: the consensus
-value first, then dissenters, then any source that reports a *set* (marked `*`):
+One IP:
 
 ```
-location.claim                [!] disagree   5 source(s)
-    ● 37.751,-97.822                     maxmind.geolite2, ripestat.geoloc
-    ◆ Mountain View, US                  dbip.lite, ipinfo
-    ~ ipmap*                             30 values: Amsterdam, Netherlands, …
+8.8.8.8
+  ASN          AS15169
+  AS Network   Google LLC
+  Prefix       8.8.8.0/24
+  Country      US
+  Location     San Jose, US
+  Hostname     dns.google
+  RPKI         valid
+  AS PeeringDB net 433 · Content
+  AS footprint 135 facilities · 175 IXPs (PeeringDB)
 
-ownership.name                [!] disagree   2 source(s)
-    ● GOGL                               rdap
-    ◆ Google LLC                         peeringdb.net
+  anycast-like: ipmap reports 29 location values
+
+  contested (3):
+    ! Hostname       dns.google (rdns.ptr) | internetdb*: 2 values: cas.emarketer.com, dns.google
+    ! Location       37.751,-97.822 (ip.guide, ripestat.geoloc) | San Jose, US (ipwho.is) | ipmap*: 29 values: ...
+    ! AS Network name Google LLC (ip.guide, peeringdb.net) | GOGL (rdap) | Google (irr.origin)
 ```
 
-`--report` shows, for every IP in the DB, the verdict per claim, plus a
-per-source track record against each cell's consensus:
+Several IPs:
 
 ```
-overview:  per-IP agreement per claim
+ip               asn       country  as network                location                  hostname                      contested
+8.8.8.8          AS15169   US       Google LLC                San Jose, US              dns.google                            3
+1.1.1.1          AS13335   AU       Cloudflare, Inc.          Sydney, AU                one.one.one.one                       0
 
-           own.asn own.nam loc.clm idn.hst ...
-     8.8.8.8    .       #       #       .
-     1.1.1.1    .       #       #       #
-
-legend: . agree  + spread  # disagree   · absent
-
-source profile:  agreement with each cell's consensus
-
-source                   cells  agree  dissent  multi
-rdap                        17     17        0      0
-ipinfo                      13      9        4      0
-ripestat.geoloc              4      4        0      0
+2 IP(s) · 33 claims · 3 contested
+most contested: AS Network name (1), Hostname (1), Location (1)
+anycast-like: 8.8.8.8 · ipmap reports 29 location values
 ```
 
-Colour is auto-detected; disable with `--no-color` or `NO_COLOR`.
+Values are labelled by source; `source*` means that source reported a set. The
+report is read-only: fetch first with `aranya <IP>`.
 
 Internals: `registry/` holds the adapters (`sources.py`), decoders (`parsers.py`,
 `ripe.py`), the parse step (`observe.py`) and the raw/observation store
-(`store.py`). `views.py` holds read-only projections over the existing tables,
-`aggregate.py` turns those rows into labelled claims / consensus / profiles, and
-`render.py` draws them. Nothing here writes to the store.
+(`store.py`). `views.py` holds read-only projections, `aggregate.py` turns rows
+into claims/consensus, and `render.py` draws the report and its anycast summary. Nothing here writes to the store.
 
-## Entity normalization
+## Entity resolution
 
-`entities.py` canonicalises values without touching the raw store: ASN to int
-(`AS15169` → `15169`), country to ISO-2, prefix to CIDR, range normalised, org
-names stripped of `AS<n>` prefixes and legal suffixes. `--normalize` applies
-this to any view (`--view`, `--report`, `--stats`), so formatting-only
-disagreements vanish; values it cannot parse are kept verbatim, never merged.
-
-`entities.resolve()` anchors name aliases to the ASN the same source reports,
-then folds in unlinked names whose canonical form matches a known entity — so
-`"AS15169 Google LLC"`, `"GOOGLE - Google LLC"` and PeeringDB's `"Google LLC"`
-all resolve to `AS15169`, while RIR's `"GOGL"` stays separate.
-
-## Cross-IP analysis
-
-`analyze.py` reduces the whole store to patterns (`--stats`): verdict
-distribution, per-claim contested rate, anycast-like sources (one source
-enriching many location claims), and per-source conformity.
+`entities.py` normalizes values without touching the raw store: ASN to int
+(`AS15169` → `15169`), country to ISO-2, prefix to CIDR, range normalized, org
+names stripped of legal suffixes. `entities.resolve()` anchors name aliases to
+the ASN the same source reports, then folds in unlinked names whose canonical
+form matches a known entity — so `"AS15169 Google LLC"`, `"GOOGLE - Google LLC"`
+and PeeringDB's `"Google LLC"` all resolve to `AS15169`, while RIR's `"GOGL"`
+stays separate.
 
 ## HTML report
 
@@ -124,18 +115,22 @@ enriching many location claims), and per-source conformity.
 file** (no server, no CDN, no build step):
 
 ```sh
-python3 aranya.py --html report.html --with-observations
+python3 aranya.py --html report.html          # all stored IPs; observations + raw sources embedded
 python3 aranya.py --export data.json --ips 8.8.8.8,1.1.1.1 --topics location,ownership
+python3 aranya.py --export data.json --with-observations
 python3 aranya.py --show-fetch 42                 # print a stored raw body
 ```
 
-Open `report.html` in a browser. Tabs: claims, source values, overview,
-agreement profile, geo. Cells carry the actual value (not just a verdict), so
+Open `report.html` in a browser. Omit `--ips` to include every stored IP; the
+IP selector lists them all. Tabs: claims, source values, overview, agreement
+profile, geo. Cells carry the actual value (not just a verdict), so
 "agreeing on what" reads directly off the table; the geo tab uses a coarse
 Natural Earth 110m outline (embedded in `world.txt`). Filter state lives in the
-URL hash, so views are shareable. If `--with-observations` is omitted,
-drill-down still works but only lists provenance and the `--show-fetch ID`
-command to pull the raw body.
+URL hash, so views are shareable. Claims are grouped by importance — IP facts,
+BGP routes, AS, identity, latency — instead of alphabetically. The provenance drawer groups the embedded
+observations by source and shows each value. Each source also expands to the
+`GET` API endpoints and raw fetch bodies used by those observations. Because raw
+bodies are embedded, HTML reports can be large.
 
 Design rules the report follows:
 
@@ -145,6 +140,11 @@ Design rules the report follows:
 - **Failure is not disagreement.** Cell states are `agree`, `dissent`, `multi`,
   `single`, `no_data`, `error`, `skipped`, `absent` — an outage never looks quiet.
 - **Single is not agreement.** One upstream alone gets its own state.
+- **A set is not a conflict.** Several values from one upstream are `set`
+  (`spread` internally); independent upstreams returning different values are
+  `disagree`.
+- **Latency is per probe.** Different probes measure different paths, so the
+  latency claim shows a probe count and RTT range, not a consensus location.
 - **The agreement profile measures conformity, not accuracy** — it is a
   diversity signal, not a trust ranking.
 - **All values are hostile.** The UI only ever sets `textContent`, and the
@@ -168,10 +168,11 @@ makes a disagreement meaningful:
 | `ipmap` | RIPE NCC (Atlas latency engine + rDNS) | inferred |
 | `routeviews.prefix` | RouteViews API collectors (IXP + U of Oregon) + Routinator/rpki-client | observed-passive |
 | `ris.looking-glass` | RIPE NCC RIS Remote Route Collectors (RRCs) | observed-passive |
+| `bgp.tools` | bgp.tools' own route collector sessions (free whois interface) | observed-passive |
 | `cymru.origin` | Team Cymru BGP (via DNS) | observed-passive |
 | `irr.origin` | RADb / IRR route objects (registered intent) | reported |
 | `rdap` | RIR RDAP | reported |
-| `peeringdb.net`, `peeringdb.netfac`, `peeringdb.netixlan`, `peeringdb.fac`, `peeringdb.ixpfx` | PeeringDB directory (facility/IX lookups follow the net) | reported |
+| `peeringdb.net`, `peeringdb.netfac`, `peeringdb.netixlan`, `peeringdb.fac`, `peeringdb.ixpfx` | PeeringDB directory (bulk facility/IX lookups follow the net) | reported |
 | `ip.guide` | ip.guide | reported |
 | `ipwho.is` | ipwho.is | reported |
 | `rdns.ptr` | DNS PTR | reported |
@@ -191,6 +192,8 @@ re-front of data we already collect):
 | Cloudflare Radar | Cloudflare's own global network (BGP + traffic analytics) | free API token (`CLOUDFLARE_RADAR_TOKEN`) | independent vantage, but key-gated |
 | GreyNoise | GreyNoise's own sensor network | community API key (`GREYNOISE_API_KEY`) | distinct sensor set, but a security/reputation data class |
 | Censys | Censys' own scanning network | API ID + secret (`CENSYS_API_ID`/`CENSYS_API_SECRET`) | distinct scanner set; same class as Shodan |
+| PCH Looking Glass | Packet Clearing House route collectors | none | public web form only; PCH explicitly asks that it not be scraped |
+| Isolario | Isolario route collectors | none | no stable public API documented |
 
 ## Optional sources
 
@@ -203,6 +206,8 @@ wins. The `.mmdb` paths default to `data/` and can be overridden.
 |---|---|---|
 | IPinfo | `IPINFO_TOKEN` | free token at ipinfo.io; can live in `scripts/.aranya.env` |
 | Shodan host API | `SHODAN_API_KEY` | account at shodan.io; **the host API consumes query credits (paid)** — keyless `internetdb` already covers the free slice |
+| bgproutes.io | `BGP_API_KEY` | free API key at bgproutes.io; queries its own BGP/BMP vantage points |
+| BGP.Tools HTTP API | paid | free whois/table exports are used; the detailed HTTP API is paid and not used |
 | MaxMind GeoLite2 City | `MAXMIND_DB` | defaults to `data/GeoLite2-City.mmdb` (free account at maxmind.com) + `pip install maxminddb` |
 | MaxMind GeoLite2 ASN | `MAXMIND_ASN_DB` | defaults to `data/GeoLite2-ASN.mmdb` (same account) |
 | DB-IP Lite | `DBIP_DB` | defaults to `data/dbip-city-lite.mmdb` (free download at db-ip.com) |

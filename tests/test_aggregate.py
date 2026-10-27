@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import aggregate
+from report import aggregate
 from registry import store
 
 
@@ -26,6 +26,8 @@ class AggregateTest(unittest.TestCase):
             ("8.8.8.8", "c", "location", "claim", {"latitude": 37.75, "longitude": -97.82}),
             ("1.1.1.1", "a", "ownership", "asn", "13335"),
             ("1.1.1.1", "b", "ownership", "asn", "15169"),
+            ("8.8.8.8", "g", "latency", "probe", {"city": "Falkenstein", "country": "DE", "avg_rtt": 6.1}),
+            ("8.8.8.8", "g", "latency", "probe", {"city": "Helsinki", "country": "FI", "avg_rtt": 1.3}),
         ])
 
     def tearDown(self):
@@ -42,12 +44,48 @@ class AggregateTest(unittest.TestCase):
             "37.75,-97.82",
         )
 
+    def test_ris_label_includes_collector_and_route(self):
+        self.assertEqual(
+            aggregate.claim_label("routing", "ris", {
+                "rrc": "RRC01",
+                "location": "London, GB",
+                "prefixes": ["8.8.8.0/24"],
+                "paths": ["15692 2914 15169"],
+            }),
+            "RRC01 London, GB · 8.8.8.0/24 · 15692 2914 15169",
+        )
+
+    def test_routeviews_label_includes_collectors_and_route(self):
+        self.assertEqual(
+            aggregate.claim_label("routing", "routeviews", {
+                "collectors": ["amsix.ams", "route-views2"],
+                "prefix": "8.8.8.0/24",
+                "as_paths": ["2119 15169"],
+            }),
+            "amsix.ams, route-views2 · 8.8.8.0/24 · 2119 15169",
+        )
+
+    def test_latency_label_and_headline(self):
+        self.assertEqual(
+            aggregate.claim_label("latency", "probe", {"city": "Falkenstein", "country": "DE", "avg_rtt": 6.1}),
+            "Falkenstein, DE · 6.1 ms",
+        )
+        rows = {(s["topic"], s["key"]): s for s in aggregate.cell_summaries(self.conn, "8.8.8.8")}
+        claim = rows[("latency", "probe")]
+        self.assertEqual(claim["verdict"], "spread")
+        self.assertEqual(claim["verdict_label"], "set")
+        self.assertEqual(claim["headline"], "2 probes · 1.3–6.1 ms")
+        self.assertIn("Different probes", claim["explanation"])
+
     def test_agreeing_asn(self):
         rows = {(s["topic"], s["key"]): s for s in aggregate.cell_summaries(self.conn, "8.8.8.8")}
         asn = rows[("ownership", "asn")]
         self.assertEqual(asn["verdict"], "agree")
         self.assertEqual(asn["consensus"], "15169")
         self.assertEqual(asn["backers"], ["a", "b"])
+        self.assertEqual(asn["verdict_label"], "agree")
+        self.assertIn("advertising this IP", asn["description"])
+        self.assertIn("agree", asn["explanation"])
 
     def test_contested_location(self):
         rows = {(s["topic"], s["key"]): s for s in aggregate.cell_summaries(self.conn, "8.8.8.8")}
@@ -73,30 +111,6 @@ class AggregateTest(unittest.TestCase):
         self.assertEqual(profile["a"]["cells"], 2)
         self.assertEqual(profile["a"]["agree"], 1)
         self.assertEqual(profile["a"]["dissent"], 1)
-
-    def test_normalized_overview(self):
-        seed(self.conn, [
-            ("4.4.4.4", "x", "ownership", "asn", "AS15169"),
-            ("4.4.4.4", "y", "ownership", "asn", "15169"),
-        ])
-        raw = aggregate.overview(self.conn, ["4.4.4.4"])
-        norm = aggregate.overview(self.conn, ["4.4.4.4"], normalize=True)
-        self.assertEqual(raw[("4.4.4.4", "ownership", "asn")], "disagree")
-        self.assertEqual(norm[("4.4.4.4", "ownership", "asn")], "agree")
-
-    def test_normalized_profile(self):
-        seed(self.conn, [
-            ("4.4.4.4", "x", "ownership", "org", "AS15169 Google LLC"),
-            ("4.4.4.4", "y", "ownership", "org", "Google LLC"),
-        ])
-        raw = aggregate.cell_summaries(self.conn, "4.4.4.4")
-        norm = aggregate.cell_summaries(self.conn, "4.4.4.4", normalize=True)
-        self.assertEqual(raw[0]["verdict"], "disagree")
-        self.assertEqual(norm[0]["verdict"], "agree")
-        normp = {row["source"]: row for row in aggregate.agreement_profile(self.conn, ["4.4.4.4"], normalize=True)}
-        self.assertEqual(normp["x"]["agree"], 1)
-        self.assertEqual(normp["y"]["agree"], 1)
-
 
 if __name__ == "__main__":
     unittest.main()

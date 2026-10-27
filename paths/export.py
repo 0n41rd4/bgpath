@@ -1,15 +1,9 @@
-"""Render a run as a scan-centric, self-contained HTML graph.
+"""Render runs as a self-contained HTML graph.
 
-Visual edges are packet traversal only: the measured hop-to-hop chain (including
-ECMP branches and gap edges). Cross-layer facts are shown by **containment**, not
-by crossing edges: hops are grouped into AS boxes and aliased hops are bracketed
-as a machine.
-
-Inter-AS edges carry a *suspected handoff* computed with no extra queries: the
-intersection of the two ASes' already-fetched PeeringDB IXP/facility sets (the
-likely interconnect). Hops are matched against their AS's `netixlan` peering-LAN
-IPs to flag IXP presence directly. AS boxes list only the relevant (shared)
-IXPs/facilities plus totals; the full lists and BGP sessions stay in the panel.
+One graph per run, and since each run is a single traceroute tool, one graph per
+tool. Visual edges are packet traversal only; inter-AS edges carry a clickable
+`handoff` (shared facilities/IXPs and whether the outgoing AS advertises the
+destination). A run that never reached the target just ends at its last hop.
 """
 
 from __future__ import annotations
@@ -21,46 +15,53 @@ import paths.analysis as analysis
 
 TEMPLATE = Path(__file__).parent / "template.html"
 
-W = 150
-H = 30
-COL_GAP = 220
+COL_GAP = 190
 ROW_GAP = 70
-ORIGIN_X = 140
-ORIGIN_Y = 140
+ORIGIN_X = 20
+ORIGIN_Y = 20
 
 
-def _load(conn, run_id: str) -> tuple[dict, dict[str, dict], list[dict]]:
-    run = conn.execute(
-        "SELECT run_id, target, src_ip, tool, started_at FROM runs WHERE run_id = ?", (run_id,)
+def _run(conn, run_id: str) -> dict:
+    row = conn.execute(
+        "SELECT run_id, target, src_ip, tool, started_at, meta FROM runs WHERE run_id = ?", (run_id,)
     ).fetchone()
-    run = (
-        {"run_id": run[0], "target": run[1], "vantage": run[2], "tool": run[3], "started_at": run[4]}
-        if run
-        else {"run_id": run_id}
-    )
-    nodes: dict[str, dict] = {}
-    for _node_id, layer, key, attrs in conn.execute("SELECT node_id, layer, key, attrs FROM nodes"):
-        nodes[key] = {"id": key, "layer": layer, "key": key, "attrs": json.loads(attrs or "{}")}
-    edges: list[dict] = []
-    for layer, src, dst, ttl, count, min_rtt, attrs in conn.execute(
-        "SELECT layer, src, dst, ttl, count, min_rtt_ms, attrs FROM edges WHERE run_id = ? "
-        "ORDER BY layer, src, dst",
+    if not row:
+        return {"run_id": run_id}
+    return {
+        "run_id": row[0],
+        "target": row[1],
+        "vantage": row[2],
+        "tool": row[3],
+        "started_at": row[4],
+        "meta": json.loads(row[5] or "{}"),
+    }
+
+
+def _nodes(conn) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for key, layer, attrs in conn.execute("SELECT key, layer, attrs FROM nodes"):
+        out[key] = {"layer": layer, **(json.loads(attrs or "{}"))}
+    return out
+
+
+def _edges(conn, run_id: str) -> list[dict]:
+    out: list[dict] = []
+    for src, dst, ttl, count, min_rtt, attrs in conn.execute(
+        "SELECT src, dst, ttl, count, min_rtt_ms, attrs FROM edges WHERE run_id = ? AND layer = 'interface'",
         (run_id,),
     ):
         data = json.loads(attrs or "{}")
-        edges.append(
+        out.append(
             {
                 "source": src,
                 "target": dst,
-                "layer": layer,
                 "ttl": ttl,
                 "count": count,
                 "min_rtt_ms": min_rtt,
                 "attrs": data,
-                "source_url": data.get("source_url"),
             }
         )
-    return run, nodes, edges
+    return out
 
 
 def _hop_ttl(conn, run_id: str) -> dict[str, int]:
@@ -71,420 +72,146 @@ def _hop_ttl(conn, run_id: str) -> dict[str, int]:
     return {ip: ttl for ip, ttl in rows}
 
 
+def _hop_rtt(conn, run_id: str) -> dict[str, float]:
+    rows = conn.execute(
+        "SELECT src_ip, MIN(rtt_ms) FROM hops WHERE run_id = ? AND src_ip IS NOT NULL GROUP BY src_ip",
+        (run_id,),
+    ).fetchall()
+    return {ip: rtt for ip, rtt in rows if rtt is not None}
+
+
 def _raw_hops(conn, run_id: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT flow_id, ttl, src_ip, reply_ttl, rtt_ms, icmp_type, icmp_code, is_last "
-        "FROM hops WHERE run_id = ? AND src_ip IS NOT NULL",
+        "SELECT flow_id, ttl, src_ip, rtt_ms, icmp_type, icmp_code, reply_ttl, ip_id, "
+        "nat_id, mpls, is_last, name, protocol, tool "
+        "FROM hops WHERE run_id = ? ORDER BY flow_id, ttl, id",
         (run_id,),
     ).fetchall()
     return [
         {
-            "flow_id": flow, "ttl": ttl, "src_ip": ip, "reply_ttl": reply, "rtt_ms": rtt,
-            "icmp_type": icmp_type, "icmp_code": icmp_code, "is_last": bool(is_last),
+            "flow_id": flow,
+            "ttl": ttl,
+            "src_ip": ip,
+            "rtt_ms": rtt,
+            "icmp_type": icmp_type,
+            "icmp_code": icmp_code,
+            "reply_ttl": reply_ttl,
+            "ip_id": ip_id,
+            "nat_id": nat_id,
+            "mpls": json.loads(mpls or "[]"),
+            "is_last": bool(last),
+            "name": name,
+            "protocol": protocol,
+            "tool": tool,
         }
-        for flow, ttl, ip, reply, rtt, icmp_type, icmp_code, is_last in rows
+        for flow, ttl, ip, rtt, icmp_type, icmp_code, reply_ttl, ip_id, nat_id, mpls, last, name, protocol, tool in rows
     ]
 
 
-def _layer_map(nodes: dict[str, dict], layer: str) -> dict[str, dict]:
-    return {key: node["attrs"] for key, node in nodes.items() if node["layer"] == layer}
-
-
-def _collectors(edges: list[dict], nodes: dict[str, dict]) -> dict[str, dict]:
-    out: dict[str, dict] = {}
-    for edge in edges:
-        if edge["layer"] != "session":
-            continue
-        name = edge["attrs"].get("collector")
-        if not name:
-            continue
-        entry = out.setdefault(
-            name,
-            {"collector": name, "prefix": edge["attrs"].get("prefix"), "as_paths": [],
-             "peers": [], "source_url": edge["source_url"], "geo": None},
-        )
-        path = edge["attrs"].get("as_path")
-        if path and path not in entry["as_paths"]:
-            entry["as_paths"].append(path)
-        if edge["source"] and edge["source"] not in entry["peers"]:
-            entry["peers"].append(edge["source"])
-    for name, entry in out.items():
-        attrs = nodes.get(f"COL:{name}", {}).get("attrs", {})
-        if attrs.get("lat") is not None:
-            entry["geo"] = {"latitude": attrs.get("lat"), "longitude": attrs.get("lng"), "country": attrs.get("country")}
-    return out
-
-
-def _hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    pts = sorted(set(points))
-    if len(pts) <= 2:
-        return pts
-
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    lower: list[tuple[float, float]] = []
-    for point in pts:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
-            lower.pop()
-        lower.append(point)
-    upper: list[tuple[float, float]] = []
-    for point in reversed(pts):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
-            upper.pop()
-        upper.append(point)
-    return lower[:-1] + upper[:-1]
-
-
-def _shape(position: dict[str, tuple[float, float]], members: list[str], pad: float, header: float = 16) -> dict:
-    xs: list[float] = []
-    ys: list[float] = []
-    points: list[tuple[float, float]] = []
-    for ip in members:
-        if ip not in position:
-            continue
-        x, y = position[ip]
-        xs.append(x)
-        ys.append(y)
-        for dx, dy in ((0, 0), (W, 0), (0, H), (W, H)):
-            px = x - pad if dx == 0 else x + W + pad
-            py = y - pad - header if dy == 0 else y + H + pad
-            points.append((round(px, 1), round(py, 1)))
-    box = {
-        "x": min(xs) - pad,
-        "y": min(ys) - pad - header,
-        "w": max(xs) - min(xs) + W + 2 * pad,
-        "h": max(ys) - min(ys) + H + 2 * pad + header,
-    }
-    return {
-        **box,
-        "hull": [[p[0], p[1]] for p in _hull(points)],
-        "lx": min(xs) - pad + 8,
-        "ly": min(ys) - pad - header + 14,
-    }
-
-
 def build(conn, run_id: str) -> dict:
-    run, nodes, edges = _load(conn, run_id)
+    run = _run(conn, run_id)
     target = run.get("target")
+    nodes = _nodes(conn)
+    edges = _edges(conn, run_id)
     ttl = _hop_ttl(conn, run_id)
-
-    traversal = [edge for edge in edges if edge["layer"] == "interface"]
-    trace: set[str] = set()
-    for edge in traversal:
-        trace.add(edge["source"])
-        trace.add(edge["target"])
-
-    raw_hops = _raw_hops(conn, run_id)
-    reach = analysis.reachability(raw_hops, target)
-
-    as_of = {e["source"]: e["target"] for e in edges if e["layer"] == "origin" and e["source"] in trace}
-    machine_of = {e["source"]: e["target"] for e in edges if e["layer"] == "machine" and e["source"] in trace}
-    aliased = {
-        ip: nodes[ip]["attrs"]["aliased_asns"]
-        for ip in trace
-        if nodes.get(ip, {}).get("attrs", {}).get("aliased_asns")
-    }
-
-    trust = analysis.ttl_trust(raw_hops)
-    geo_of = {ip: nodes.get(ip, {}).get("attrs", {}).get("geo") for ip in trace}
-    gap_before = {edge["target"] for edge in traversal if edge["attrs"].get("gap")}
-    rtt_of = {ip: (trust.get(ip) or {}).get("rtt_ms") for ip in trace}
-    measured = [ip for ip in trace if rtt_of.get(ip) is not None]
-    long_haul = max(measured, key=lambda ip: rtt_of[ip]) if measured else None
-
-    ix_nodes = _layer_map(nodes, "ix")
-    fac_nodes = _layer_map(nodes, "facility")
-    collectors = _collectors(edges, nodes)
-
-    as_ix: dict[str, dict[str, dict]] = {}
-    as_fac: dict[str, dict[str, dict]] = {}
-    for edge in edges:
-        if edge["layer"] == "ix":
-            info = ix_nodes.get(edge["target"], {})
-            as_ix.setdefault(edge["source"], {})[edge["target"]] = {
-                "id": info.get("ix_id"),
-                "name": info.get("name") or edge["target"],
-                "ipaddr4": edge["attrs"].get("ipaddr4"),
-                "ipaddr6": edge["attrs"].get("ipaddr6"),
-                "source_url": info.get("source_url"),
-            }
-        elif edge["layer"] == "facility":
-            info = fac_nodes.get(edge["target"], {})
-            as_fac.setdefault(edge["source"], {})[edge["target"]] = {
-                "name": info.get("name") or edge["target"],
-                "city": info.get("city"),
-                "country": info.get("country"),
-                "latitude": info.get("latitude"),
-                "longitude": info.get("longitude"),
-                "source_url": info.get("source_url"),
-            }
-
-    ix_port: dict[tuple[str, str], str] = {}
-    for asn, members in as_ix.items():
-        for key, info in members.items():
-            for field in ("ipaddr4", "ipaddr6"):
-                if info.get(field):
-                    ix_port[(asn, info[field])] = key
+    rtt = _hop_rtt(conn, run_id)
+    raw = _raw_hops(conn, run_id)
+    endpoints = {edge["source"] for edge in edges} | {edge["target"] for edge in edges}
+    if endpoints:
+        ttl = {ip: value for ip, value in ttl.items() if ip in endpoints}
 
     columns: dict[int, list[str]] = {}
-    for ip in trace:
-        columns.setdefault(ttl.get(ip, 0), []).append(ip)
-    order = sorted(columns)
-    index = {value: position for position, value in enumerate(order)}
-    tallest = max(len(members) for members in columns.values())
+    for ip in ttl:
+        columns.setdefault(ttl[ip], []).append(ip)
     position: dict[str, tuple[float, float]] = {}
-    for value, members in columns.items():
-        members.sort()
-        offset = (tallest - len(members)) * ROW_GAP / 2
+    for col, ttl_value in enumerate(sorted(columns)):
+        members = sorted(columns[ttl_value])
         for row, ip in enumerate(members):
-            position[ip] = (ORIGIN_X + index[value] * COL_GAP, ORIGIN_Y + offset + row * ROW_GAP)
-
-    relevant_ix: dict[str, set[str]] = {}
-    relevant_fac: dict[str, set[str]] = {}
-    out_edges = []
-    for edge in traversal:
-        if edge["source"] not in position or edge["target"] not in position:
-            continue
-        a_as, b_as = as_of.get(edge["source"]), as_of.get(edge["target"])
-        geo_a, geo_b = geo_of.get(edge["source"]), geo_of.get(edge["target"])
-        handoff = {"ixps": [], "facilities": [], "bgp": [], "geo": None}
-        if a_as and b_as and a_as != b_as:
-            shared_ix = set(as_ix.get(a_as, {})) & set(as_ix.get(b_as, {}))
-            suspects: dict[str, dict] = {
-                key: {**as_fac[a_as][key], "method": "shared"}
-                for key in set(as_fac.get(a_as, {})) & set(as_fac.get(b_as, {}))
-            }
-            geo_match, distance = (False, None)
-            if geo_a and geo_b:
-                geo_match, distance = analysis.same_place(geo_a, geo_b)
-            place = geo_a or geo_b
-            if geo_match and place:
-                for asn in (a_as, b_as):
-                    for key, fac in as_fac.get(asn, {}).items():
-                        if analysis.facility_matches_place(fac, place):
-                            if key in suspects:
-                                suspects[key]["method"] = "shared+geo"
-                            else:
-                                suspects[key] = {**fac, "method": "geo"}
-            bgp_here = []
-            for name, col in collectors.items():
-                near = False
-                if place and col["geo"]:
-                    gap = analysis.haversine_km(place, col["geo"])
-                    near = gap is not None and gap <= 500
-                path_hits = any(
-                    a_as[2:] in path.split() and b_as[2:] in path.split()
-                    for path in col["as_paths"]
-                )
-                if near or path_hits:
-                    bgp_here.append(
-                        {"collector": name, "near": near, "path_hits": path_hits,
-                         "as_paths": col["as_paths"][:3], "geo": col["geo"], "source_url": col["source_url"]}
-                    )
-            for key, fac in suspects.items():
-                supports: set[str] = set()
-                if fac["method"].startswith("shared"):
-                    supports.add("shared")
-                if "geo" in fac["method"]:
-                    supports.add("geo")
-                fac_geo = {"latitude": fac.get("latitude"), "longitude": fac.get("longitude")}
-                fac_country = (fac.get("country") or "").strip().casefold()
-                evidence = []
-                for name, col in collectors.items():
-                    if not col["geo"]:
-                        continue
-                    gap = analysis.haversine_km(fac_geo, col["geo"])
-                    if gap is not None and gap <= 100:
-                        supports.add("bgp")
-                        evidence.append(
-                            {"collector": name, "distance_km": round(gap),
-                             "as_paths": col["as_paths"][:2], "source_url": col["source_url"]}
-                        )
-                    elif fac_country and fac_country == (col["geo"].get("country") or "").strip().casefold():
-                        supports.add("bgp-country")
-                fac["supports"] = sorted(supports)
-                fac["bgp"] = evidence
-                fac["weak"] = not ({"shared", "bgp", "bgp-country"} & supports)
-            handoff = {
-                "ixps": [as_ix[a_as][k] for k in sorted(shared_ix, key=lambda k: as_ix[a_as][k]["name"] or "")],
-                "facilities": [suspects[k] for k in sorted(suspects, key=lambda k: suspects[k]["name"] or "")],
-                "bgp": bgp_here,
-                "geo": {
-                    "a": analysis.place_of(geo_a),
-                    "b": analysis.place_of(geo_b),
-                    "match": geo_match,
-                    "distance_km": distance,
-                    "rtt_km_upper": analysis.rtt_km_upper(edge["min_rtt_ms"]),
-                    "plausible": analysis.geo_plausible(distance, edge["min_rtt_ms"]),
-                } if (geo_a or geo_b) else None,
-            }
-            if shared_ix:
-                relevant_ix.setdefault(a_as, set()).update(shared_ix)
-                relevant_ix.setdefault(b_as, set()).update(shared_ix)
-            if suspects:
-                relevant_fac.setdefault(a_as, set()).update(suspects)
-                relevant_fac.setdefault(b_as, set()).update(suspects)
-        out_edges.append(
-            {
-                "source": edge["source"],
-                "target": edge["target"],
-                "gap": bool(edge["attrs"].get("gap")),
-                "count": edge["count"],
-                "min_rtt_ms": edge["min_rtt_ms"],
-                "ttl": edge["ttl"],
-                "protocols": edge["attrs"].get("protocols") or [],
-                "tools": edge["attrs"].get("tools") or [],
-                "from_as": a_as,
-                "to_as": b_as,
-                "handoff": handoff,
-            }
-        )
+            position[ip] = (ORIGIN_X + row * COL_GAP, ORIGIN_Y + col * ROW_GAP)
 
     hops = []
-    for ip in sorted(trace):
+    for ip in sorted(position, key=lambda value: (ttl.get(value, 0), value)):
         x, y = position[ip]
-        asn = as_of.get(ip)
-        attrs = nodes.get(ip, {}).get("attrs", {})
-        port = ix_port.get((asn, ip)) if asn else None
-        if port and asn:
-            relevant_ix.setdefault(asn, set()).add(port)
-        hop_ix = as_ix.get(asn, {}).get(port) if port else None
-        rel_ix = [
-            as_ix[asn][k]
-            for k in sorted(relevant_ix.get(asn, set()), key=lambda k: as_ix[asn][k]["name"] or "")
-            if k in as_ix.get(asn, {})
-        ] if asn else []
-        rel_fac = [
-            as_fac[asn][k]
-            for k in sorted(relevant_fac.get(asn, set()), key=lambda k: as_fac.get(asn, {}).get(k, {}).get("name") or "")
-            if k in as_fac.get(asn, {})
-        ] if asn else []
-        entry = trust.get(ip)
-        confidence, reasons = analysis.ttl_confidence(entry, ip in gap_before)
+        attrs = nodes.get(ip, {})
         hops.append(
             {
                 "id": ip,
                 "ttl": ttl.get(ip),
                 "x": x,
                 "y": y,
-                "as": asn,
-                "as_name": nodes.get(asn, {}).get("attrs", {}).get("name"),
-                "machine": machine_of.get(ip),
-                "aliased_asns": aliased.get(ip),
+                "asn": attrs.get("asn"),
+                "as_name": attrs.get("as_name"),
+                "prefix": attrs.get("prefix"),
+                "country": attrs.get("country"),
+                "city": attrs.get("city"),
+                "latitude": attrs.get("latitude"),
+                "longitude": attrs.get("longitude"),
+                "hostname": attrs.get("hostname"),
+                "ixp": attrs.get("ixp"),
+                "bgp_asn": attrs.get("bgp_asn"),
+                "bgp_prefix": attrs.get("bgp_prefix"),
+                "bgp_country": attrs.get("bgp_country"),
+                "bgp_name": attrs.get("bgp_name"),
                 "is_target": ip == target,
-                "ix": hop_ix,
-                "relevant_ixps": rel_ix,
-                "relevant_facilities": rel_fac,
-                "total_ixps": len(as_ix.get(asn, {})),
-                "total_facilities": len(as_fac.get(asn, {})),
-                "geo": attrs.get("geo"),
-                "geo_sources": attrs.get("geo_sources") or {},
-                "rtt_ms": rtt_of.get(ip),
-                "rtt_km_upper": analysis.rtt_km_upper(rtt_of.get(ip)),
-                "long_haul": ip == long_haul,
-                "ttl_flows": entry["flows"] if entry else None,
-                "ttl_reply": entry["reply_ttl"] if entry else None,
-                "ttl_return_hops": entry["return_hops"] if entry else None,
-                "ttl_confidence": confidence,
-                "ttl_reasons": reasons,
-                "protocols": attrs.get("protocols") or [],
-                "tools": attrs.get("tools") or [],
-                "attrs": attrs,
-                "source_url": attrs.get("source_url") or f"https://stat.ripe.net/{ip}",
+                "rtt_ms": rtt.get(ip),
             }
         )
 
-    containers = []
-    as_members: dict[str, list[str]] = {}
-    for ip, asn in as_of.items():
-        as_members.setdefault(asn, []).append(ip)
-    for asn, members in sorted(as_members.items()):
-        as_attrs = nodes.get(asn, {}).get("attrs", {})
-        info = {
-            "name": as_attrs.get("name"),
-            "probe_count": as_attrs.get("probe_count"),
-            "probe_countries": as_attrs.get("probe_countries") or {},
-            "ixps": [
-                as_ix[asn][k]
-                for k in sorted(relevant_ix.get(asn, set()), key=lambda k: as_ix[asn][k]["name"] or "")
-                if k in as_ix.get(asn, {})
-            ],
-            "facilities": [
-                as_fac[asn][k]
-                for k in sorted(relevant_fac.get(asn, set()), key=lambda k: as_fac.get(asn, {}).get(k, {}).get("name") or "")
-                if k in as_fac.get(asn, {})
-            ],
-            "total_ixps": len(as_ix.get(asn, {})),
-            "total_facilities": len(as_fac.get(asn, {})),
-            "source_url": f"https://stat.ripe.net/{asn}",
-        }
-        header = 30 if (info["ixps"] or info["facilities"]) else 16
-        containers.append({"id": f"as:{asn}", "kind": "as", "label": asn, **_shape(position, members, 12, header), "info": info})
-
-    machine_members: dict[str, list[str]] = {}
-    for ip, machine in machine_of.items():
-        machine_members.setdefault(machine, []).append(ip)
-    for machine, members in sorted(machine_members.items()):
-        containers.append({"id": f"machine:{machine}", "kind": "machine", "label": "same machine", **_shape(position, members, 6), "info": {}})
+    out_edges = []
+    for edge in edges:
+        src, dst = edge["source"], edge["target"]
+        if src not in position or dst not in position:
+            continue
+        attrs = edge["attrs"]
+        handoff = attrs.get("handoff")
+        out_edges.append(
+            {
+                "source": src,
+                "target": dst,
+                "gap": bool(attrs.get("gap")),
+                "from_as": nodes.get(src, {}).get("asn"),
+                "to_as": nodes.get(dst, {}).get("asn"),
+                "handoff": handoff,
+                "peering": bool(handoff and handoff.get("confirmed")),
+            }
+        )
 
     return {
-        "run": run,
-        "reachability": reach,
+        "run": {
+            "run_id": run.get("run_id"),
+            "target": target,
+            "vantage": run.get("vantage"),
+            "tool": run.get("tool"),
+            "started_at": run.get("started_at"),
+            "meta": run.get("meta") or {},
+        },
+        "ping": run.get("meta", {}).get("ping"),
+        "reachability": analysis.reachability(raw, target),
         "hops": hops,
-        "containers": containers,
         "edges": out_edges,
-        "sessions": _sessions(edges),
-        "collectors": sorted(collectors.values(), key=lambda item: item["collector"]),
-        "facilities": _node_list(nodes, edges, "facility"),
-        "ixps": _node_list(nodes, edges, "ix"),
+        "raw": raw,
     }
 
 
-def _sessions(edges: list[dict]) -> list[dict]:
-    sessions = []
-    for edge in edges:
-        if edge["layer"] != "session":
-            continue
-        sessions.append(
+def build_graphs(conn, run_ids: list[str]) -> dict:
+    graphs = []
+    target = None
+    for run_id in run_ids:
+        data = build(conn, run_id)
+        run = data["run"]
+        target = target or run.get("target")
+        graphs.append(
             {
-                "speaker": edge["source"],
-                "collector": edge["attrs"].get("collector"),
-                "as_path": edge["attrs"].get("as_path"),
-                "prefix": edge["attrs"].get("prefix"),
-                "timestamp": edge["attrs"].get("timestamp"),
-                "source_url": edge["source_url"],
+                **data,
+                "label": f"{run.get('tool') or '?'} · {run.get('target') or '?'}",
             }
         )
-    sessions.sort(key=lambda item: (item.get("prefix") or "", item.get("speaker") or ""))
-    return sessions
-
-
-def _node_list(nodes: dict[str, dict], edges: list[dict], layer: str) -> list[dict]:
-    items = {}
-    for key, node in nodes.items():
-        if node["layer"] == layer:
-            items[key] = {"id": key, "name": node["attrs"].get("name") or key, "source_url": node["attrs"].get("source_url")}
-    return sorted(items.values(), key=lambda item: item["id"])
+    return {"target": target, "graphs": graphs}
 
 
 def _embed(data: dict) -> str:
     text = json.dumps(data, ensure_ascii=False, sort_keys=True)
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-
-
-def build_graphs(conn, run_ids: list[str]) -> dict:
-    graphs = []
-    for run_id in run_ids:
-        data = build(conn, run_id)
-        run = data.get("run") or {}
-        data["run_id"] = run_id
-        data["label"] = f"{run.get('tool') or '?'} · {run.get('target') or '?'}"
-        data["vantage"] = run.get("vantage")
-        data["started_at"] = run.get("started_at")
-        graphs.append(data)
-    vantages = sorted({g["vantage"] for g in graphs if g.get("vantage")})
-    return {"graphs": graphs, "vantages": vantages, "vantage_mismatch": len(vantages) > 1}
 
 
 def render_html(conn, run_ids) -> str:

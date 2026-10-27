@@ -99,29 +99,6 @@ def org(value) -> str:
     return " ".join(deduped) if deduped else str(value or "").upper()
 
 
-def tokens(value: str) -> frozenset[str]:
-    return frozenset(re.findall(r"[A-Z0-9]+", org(value)))
-
-
-def same_name(a: str, b: str) -> bool:
-    left, right = tokens(a), tokens(b)
-    return bool(left) and bool(right) and bool(left & right)
-
-
-def canonical(topic: str, key: str, value):
-    if (topic, key) == ("ownership", "asn"):
-        result = asn(value)
-    elif (topic, key) == ("country", "country"):
-        result = country(value)
-    elif key == "prefix":
-        result = prefix(value)
-    elif key == "range":
-        result = range_canon(value)
-    elif key in ("name", "org", "holder"):
-        result = org(value)
-    else:
-        return value
-    return value if result is None else result
 
 
 def resolve(conn, ip: str) -> dict:

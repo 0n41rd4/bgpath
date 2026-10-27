@@ -1,13 +1,16 @@
-"""CLI: capture a trace, build the topological graph, optionally enrich it.
+"""CLI: ping + traceroute a target with every available tool, then render HTML.
 
-    python -m paths trace 8.8.8.8 --flows 4 --enrich
+    python -m paths trace 41.222.2.1              # runs all tools, writes 41.222.2.1.html
+    python -m paths trace 41.222.2.1 --tools mtr,traceroute
+    python -m paths ingest mtr.json --tool mtr --target 41.222.2.1
     python -m paths show
-    python -m paths topology <run_id>
+    python -m paths html --target 41.222.2.1 -o paths.html
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 
@@ -22,133 +25,167 @@ import registry.sources as sources
 
 DEFAULT_DB = "paths.db"
 
+NATIVE_TOOLS = ("scamper", "dublin", "voyage")
+ALL_TOOLS = NATIVE_TOOLS + ("mtr", "traceroute")
+RETRY_TTL = 64
+
 
 def _run_id(target: str) -> str:
     return f"{target}@{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.{os.urandom(2).hex()}"
 
 
-def _enrich(conn, run_id, interface, args) -> None:
-    stats = enrich.expand(
-        conn,
-        run_id,
-        interface,
-        budget=args.budget,
-        sessions=not args.no_sessions,
-        peeringdb=not args.no_peeringdb,
-        neighbours=not args.no_neighbours,
-        aliases=not args.no_alias,
-        geo=not args.no_geo,
-        probes=not args.no_probes,
-    )
-    print(
-        f"  enriched: {stats['origin_edges']} origin edges, {stats['as_edges']} AS edges, "
-        f"{stats['facilities']} facilities, {stats['ixps']} IXPs, {len(stats['asns'])} ASes"
-    )
-    print(
-        f"  AS names: {stats['named']}, hops geolocated: {stats['located']}, "
-        f"facility coords: {stats['facility_geo']}, ASes with Atlas probes: {stats['probed']}"
-    )
-    sessions = stats["sessions"]
-    print(
-        f"  BGP sessions: {sessions['sessions']} over {sessions['collectors']} collectors "
-        f"(prefix {sessions['prefix']})"
-    )
-    if stats["aliased"]:
-        print("  IP aliasing (one IP, >1 AS):")
-        for ip, asns in stats["aliased"].items():
-            print(f"    {ip} -> {', '.join(asns)}")
-    else:
-        print("  IP aliasing: none observed")
-    print(f"  alias resolution: {stats['machines']} machine(s), {stats['clustered']} interfaces clustered")
-
-
 def _build_interface(conn, run_id):
-    interface = graphlib.interface_graph(store.load_hops(conn, run_id))
+    graph = graphlib.interface_graph(store.load_hops(conn, run_id))
     store.clear_layer(conn, run_id, "interface")
-    graphlib.persist(conn, run_id, interface, layer="interface")
-    return interface
+    graphlib.persist(conn, run_id, graph)
+    return graph
 
 
-def _report_interface(interface) -> None:
-    summary = graphlib.summary(interface)
-    print(
-        f"  interface layer: {summary['nodes']} nodes, {summary['edges']} edges, "
-        f"{len(summary['ecmp_nodes'])} ECMP fan-out, {summary['gap_edges']} gap edges"
-    )
-    for node in summary["ecmp_nodes"]:
-        nexts = sorted(interface.successors(node))
-        print(f"    ECMP {node} -> {', '.join(nexts)}")
+def _available_tools() -> list[str]:
+    return [tool for tool in ALL_TOOLS if probe.available(tool)]
 
 
-def _report_reachability(conn, run_id, target) -> dict:
-    reach = analysis.reachability(store.load_hops(conn, run_id), target)
-    if not reach["reached"]:
-        detail = reach["error"] or "no reply"
-        print(f"  target not reached: last hop {reach['last_hop']} ttl {reach['last_ttl']} ({detail})")
-    return reach
+def _observed(hops: list[dict]) -> int:
+    return sum(1 for hop in hops if hop.get("src_ip"))
+
+
+def _should_retry_ttl(hops: list[dict], target: str, maxttl: int) -> bool:
+    """Retry only when a trace hit its TTL cap without reaching the target."""
+    if maxttl >= RETRY_TTL or not hops:
+        return False
+    if any(hop.get("src_ip") == target for hop in hops):
+        return False
+    ttls = [hop["ttl"] for hop in hops if hop.get("src_ip") and hop.get("ttl") is not None]
+    return bool(ttls) and max(ttls) >= maxttl
+
+
+def _capture_tool(tool, target, flows, maxttl, protocols):
+    if tool in NATIVE_TOOLS:
+        return probe.run(target, flows=flows, max_ttl=maxttl, tool=tool, protocols=protocols)
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if tool == "mtr":
+        hops = ingest.capture_mtr(target)
+        meta = {"tool": "mtr", "protocols": ["icmp"], "flows": 1, "max_ttl": maxttl,
+                "flow_ids": sorted({hop["flow_id"] for hop in hops if hop["flow_id"] is not None})}
+    elif tool == "traceroute":
+        hops = ingest.capture_traceroute(target, max_ttl=maxttl)
+        meta = {"tool": "traceroute", "protocols": [], "flows": 1, "max_ttl": maxttl,
+                "flow_ids": sorted({hop["flow_id"] for hop in hops if hop["flow_id"] is not None})}
+    else:
+        raise RuntimeError(f"unknown tool: {tool}")
+    return started, hops, meta
+
+
+def run_target(
+    target: str,
+    tools: list[str] | None = None,
+    flows: int = 4,
+    maxttl: int = 32,
+    protocols: tuple[str, ...] = ("udp",),
+    db: str = DEFAULT_DB,
+    output: str | None = None,
+    do_enrich: bool = True,
+    no_cache: bool = False,
+    text: bool = False,
+) -> int:
+    if no_cache:
+        os.environ["PATHS_CACHE"] = "off"
+    tools = tools if tools is not None else _available_tools()
+    if not tools:
+        print("no traceroute tools available (scamper/dublin/voyage/mtr/traceroute)")
+        return 1
+
+    ping = probe.capture_ping(target)
+    if ping is None:
+        print("  ping: unavailable (tracing anyway)")
+    elif ping["reachable"]:
+        print(f"  ping: ok  avg {ping['rtt_avg_ms']} ms  loss {ping['loss_percent']}%")
+    else:
+        print(f"  ping: unreachable  loss {ping['loss_percent']}% (tracing anyway)")
+
+    conn = store.open_store(db)
+    run_ids: list[str] = []
+    for tool in tools:
+        try:
+            started, hops, meta = _capture_tool(tool, target, flows, maxttl, protocols)
+        except Exception as exc:
+            print(f"  {tool}: skipped ({exc})")
+            continue
+        if tool != "mtr" and _should_retry_ttl(hops, target, maxttl):
+            print(f"  {tool}: stopped at TTL {maxttl}; retrying once with {RETRY_TTL}")
+            try:
+                retry_started, retry_hops, retry_meta = _capture_tool(
+                    tool, target, flows, RETRY_TTL, protocols
+                )
+            except Exception as exc:
+                print(f"  {tool}: retry skipped ({exc})")
+            else:
+                reached = any(hop.get("src_ip") == target for hop in retry_hops)
+                if retry_hops and (reached or _observed(retry_hops) > _observed(hops)):
+                    started, hops, meta = retry_started, retry_hops, retry_meta
+                    meta["retry_ttl"] = RETRY_TTL
+        if not hops:
+            print(f"  {tool}: no hops")
+            continue
+        meta["ping"] = ping
+        run_id = _run_id(target)
+        store.save_run(
+            conn,
+            {"run_id": run_id, "target": target, "src_ip": meta.get("vantage"),
+             "tool": meta.get("tool", tool), "started_at": started, "meta": meta},
+        )
+        store.save_hops(conn, run_id, hops)
+        graph = _build_interface(conn, run_id)
+        summary = graphlib.summary(graph)
+        reach = analysis.reachability(hops, target)
+        status = "reached" if reach["reached"] else "not reached"
+        print(f"  {tool}: {summary['nodes']} nodes, {summary['edges']} edges ({status})")
+        if do_enrich:
+            stats = enrich.expand(conn, run_id, graph, target)
+            print(f"      enriched: {len(stats['asns'])} ASes, {stats['handoffs']} inter-AS handoffs")
+        run_ids.append(run_id)
+
+    if not run_ids:
+        conn.close()
+        print("no runs captured")
+        return 1
+
+    if text:
+        conn.close()
+        return 0
+
+    html = paths_export.render_html(conn, run_ids)
+    conn.close()
+    out = output or f"{target}.html"
+    with open(out, "w", encoding="utf-8") as handle:
+        handle.write(html)
+    print(f"wrote {out}  ({len(run_ids)} graph(s))")
+    return 0
 
 
 def cmd_trace(args) -> int:
-    if args.no_cache:
-        os.environ["PATHS_CACHE"] = "off"
-    if not probe.available(args.tool):
-        print(f"{probe.TOOLS.get(args.tool, args.tool)} not found on PATH")
-        return 1
-    protocols = tuple(p.strip() for p in args.protocols.split(",") if p.strip())
-    try:
-        started, hops, meta = probe.run(
-            args.target, flows=args.flows, max_ttl=args.maxttl, tool=args.tool, protocols=protocols
-        )
-    except Exception as exc:
-        print(f"capture failed: {exc}")
-        return 1
-    if not hops:
-        print("no hops captured")
-        return 1
-    run_id = _run_id(args.target)
-    conn = store.open_store(args.db)
-    store.save_run(
-        conn,
-        {
-            "run_id": run_id,
-            "target": args.target,
-            "port": 33434,
-            "proto": ",".join(protocols),
-            "src_ip": meta.get("vantage"),
-            "tool": meta.get("tool"),
-            "started_at": started,
-            "meta": meta,
-        },
+    tools = [part.strip() for part in args.tools.split(",") if part.strip()] if args.tools else None
+    protocols = tuple(part.strip() for part in args.protocols.split(",") if part.strip())
+    return run_target(
+        args.target,
+        tools=tools,
+        flows=args.flows,
+        maxttl=args.maxttl,
+        protocols=protocols,
+        db=args.db,
+        output=args.output,
+        do_enrich=not args.no_enrich,
+        no_cache=args.no_cache,
+        text=args.text,
     )
-    store.save_hops(conn, run_id, hops)
-    interface = _build_interface(conn, run_id)
-
-    print(f"run {run_id}  vantage {meta.get('vantage')}  flows {meta.get('flow_ids')}  protocols {meta.get('protocols')}")
-    _report_interface(interface)
-    _report_reachability(conn, run_id, args.target)
-    if args.enrich:
-        _enrich(conn, run_id, interface, args)
-    conn.close()
-    return 0
 
 
 def cmd_ingest(args) -> int:
     if args.no_cache:
         os.environ["PATHS_CACHE"] = "off"
     conn = store.open_store(args.db)
-    run_id = args.run_id
-    if run_id:
-        row = conn.execute("SELECT target FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-        target = row[0] if row else args.target
-    else:
-        target = args.target
-        if not target:
-            print("--target is required for a new run")
-            conn.close()
-            return 1
-        run_id = _run_id(target)
     try:
-        hops = ingest.ingest_hops(args.file, args.tool, args.protocol, target)
+        hops = ingest.ingest_hops(args.file, args.tool, args.protocol, args.target)
     except Exception as exc:
         print(f"ingest failed: {exc}")
         conn.close()
@@ -157,28 +194,21 @@ def cmd_ingest(args) -> int:
         print("no hops in file")
         conn.close()
         return 1
-    if not conn.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone():
-        vantage = args.vantage or next((hop.get("probe_src") for hop in hops if hop.get("probe_src")), None)
-        store.save_run(
-            conn,
-            {
-                "run_id": run_id,
-                "target": target,
-                "port": None,
-                "proto": args.protocol,
-                "src_ip": vantage,
-                "tool": args.tool,
-                "started_at": args.captured_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "meta": {"tool": args.tool, "protocols": [args.protocol] if args.protocol else []},
-            },
-        )
+    run_id = _run_id(args.target)
+    store.save_run(
+        conn,
+        {"run_id": run_id, "target": args.target, "src_ip": args.vantage, "tool": args.tool,
+         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+         "meta": {"tool": args.tool, "protocols": [args.protocol] if args.protocol else []}},
+    )
     store.save_hops(conn, run_id, hops)
-    interface = _build_interface(conn, run_id)
-    print(f"run {run_id}  ingested {len(hops)} hops from {args.tool}{'/' + args.protocol if args.protocol else ''}")
-    _report_interface(interface)
-    _report_reachability(conn, run_id, target)
-    if args.enrich:
-        _enrich(conn, run_id, interface, args)
+    graph = _build_interface(conn, run_id)
+    reach = analysis.reachability(hops, args.target)
+    status = "reached" if reach["reached"] else "not reached"
+    print(f"run {run_id}  ingested {len(hops)} hops from {args.tool} ({status})")
+    if not args.no_enrich:
+        stats = enrich.expand(conn, run_id, graph, args.target)
+        print(f"  enriched: {len(stats['asns'])} ASes, {stats['handoffs']} inter-AS handoffs")
     conn.close()
     return 0
 
@@ -186,41 +216,23 @@ def cmd_ingest(args) -> int:
 def cmd_show(args) -> int:
     conn = store.open_store(args.db)
     runs = conn.execute(
-        "SELECT run_id, target, src_ip, started_at, tool FROM runs ORDER BY started_at"
+        "SELECT run_id, target, src_ip, tool, started_at, meta FROM runs ORDER BY started_at"
     ).fetchall()
     if not runs:
         print("no runs")
         conn.close()
         return 0
-    for run_id, target, src_ip, started_at, tool in runs:
-        print(f"{run_id}  target={target}  vantage={src_ip}  {started_at}  {tool}")
+    for run_id, target, src_ip, tool, started_at, meta in runs:
+        meta = json.loads(meta or "{}")
+        ping = meta.get("ping")
+        p = ""
+        if ping:
+            p = "  ping=" + ("ok" if ping.get("reachable") else "unreachable")
+        print(f"{run_id}  target={target}  tool={tool}  vantage={src_ip}  {started_at}{p}")
         counts = store.graph_counts(conn, run_id)
-        for layer, nodes in counts["nodes"].items():
-            edges = counts["edges"].get(layer, {})
-            print(f"    {layer:<10} {nodes:>4} nodes  {edges.get('distinct', 0):>4} edges")
-    conn.close()
-    return 0
-
-
-def cmd_topology(args) -> int:
-    conn = store.open_store(args.db)
-    rows = conn.execute(
-        "SELECT layer, src, dst, ttl, count, min_rtt_ms FROM edges WHERE run_id = ? "
-        "ORDER BY CASE layer WHEN 'interface' THEN 0 WHEN 'machine' THEN 1 WHEN 'origin' THEN 2 "
-        "WHEN 'as' THEN 3 WHEN 'session' THEN 4 WHEN 'collector' THEN 5 WHEN 'facility' THEN 6 WHEN 'ix' THEN 7 ELSE 8 END, src, dst",
-        (args.run_id,),
-    ).fetchall()
-    if not rows:
-        print(f"no edges for run {args.run_id}")
-        conn.close()
-        return 1
-    current = None
-    for layer, src, dst, ttl, count, min_rtt in rows:
-        if layer != current:
-            print(f"[{layer}]")
-            current = layer
-        rtt = f" {min_rtt:6.1f}ms" if min_rtt is not None else ""
-        print(f"  {src:<22} -> {dst:<22} ttl={ttl} flows={count}{rtt}")
+        nodes = counts["nodes"].get("interface", 0)
+        edges = counts["edges"].get("interface", {}).get("distinct", 0)
+        print(f"    interface: {nodes} nodes, {edges} edges")
     conn.close()
     return 0
 
@@ -232,10 +244,10 @@ def cmd_html(args) -> int:
         rows = conn.execute(
             "SELECT run_id, tool FROM runs WHERE target = ? ORDER BY started_at", (args.target,)
         ).fetchall()
-        by_tool: dict[str, str] = {}
+        latest: dict[str, str] = {}
         for run_id, tool in rows:
-            by_tool[tool or "?"] = run_id
-        run_ids = list(by_tool.values())
+            latest[tool or "?"] = run_id
+        run_ids = list(latest.values())
     if not run_ids:
         row = conn.execute("SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
         if not row:
@@ -244,12 +256,85 @@ def cmd_html(args) -> int:
             return 1
         run_ids = [row[0]]
     html = paths_export.render_html(conn, run_ids)
-    out = args.output or f"{run_ids[0].replace('@', '_').replace(':', '')}.html"
-    with open(out, "w") as handle:
+    out = args.output or f"{run_ids[0].replace('@', '_')}.html"
+    with open(out, "w", encoding="utf-8") as handle:
         handle.write(html)
     print(f"wrote {out}  ({len(html)} bytes, {len(run_ids)} graph(s))")
     conn.close()
     return 0
+
+
+def cmd_clear(args) -> int:
+    conn = store.open_store(args.db)
+    try:
+        if args.target:
+            counts = store.clear(conn, args.target)
+            suffix = f" ({args.target})"
+        else:
+            counts = store.clear(conn)
+            suffix = " (all)"
+    finally:
+        conn.close()
+    print(
+        f"cleared {counts['runs']} runs, {counts['hops']} hops, {counts['edges']} edges, "
+        f"{counts['nodes']} nodes, {counts['fetches']} fetches{suffix}"
+    )
+    return 0
+
+
+def run_path(argv: list[str] | None = None) -> int:
+    sources.load_env()
+    parser = argparse.ArgumentParser(prog="aranya path", description="ping + traceroute a target and render HTML")
+    parser.add_argument("target", nargs="?", help="destination IP")
+    parser.add_argument("--tools", help="comma-separated: scamper,dublin,voyage,mtr,traceroute (default: all available)")
+    parser.add_argument("--flows", type=int, default=4)
+    parser.add_argument("--maxttl", type=int, default=32)
+    parser.add_argument("--protocols", default="udp", help="comma-separated Paris protocols: udp,icmp,tcp")
+    parser.add_argument("--db", default=DEFAULT_DB, help="paths SQLite file")
+    parser.add_argument("-o", "--output", help="HTML output path (default <target>.html)")
+    parser.add_argument("--no-enrich", action="store_true")
+    parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--text", action="store_true", help="print the text summary instead of HTML")
+    parser.add_argument("--clear", nargs="?", const="", metavar="TARGET", help="empty the whole paths DB (or just TARGET) and exit")
+    args = parser.parse_args(argv)
+    if args.clear is not None:
+        if args.target:
+            parser.error("--clear takes the target as its argument; e.g. --clear 8.8.8.8")
+        targets = [part.strip() for part in args.clear.split(",") if part.strip()]
+        conn = store.open_store(args.db)
+        try:
+            totals = {"runs": 0, "hops": 0, "edges": 0, "nodes": 0, "fetches": 0}
+            if targets:
+                for target in targets:
+                    counts = store.clear(conn, target)
+                    totals = {key: totals[key] + counts[key] for key in totals}
+                suffix = f" ({', '.join(targets)})"
+            else:
+                totals = store.clear(conn)
+                suffix = " (all)"
+        finally:
+            conn.close()
+        print(
+            f"cleared {totals['runs']} runs, {totals['hops']} hops, {totals['edges']} edges, "
+            f"{totals['nodes']} nodes, {totals['fetches']} fetches{suffix}"
+        )
+        return 0
+    if not args.target:
+        parser.error("a target is required unless --clear is used")
+    tools = [part.strip() for part in args.tools.split(",") if part.strip()] if args.tools else None
+    protocols = tuple(part.strip() for part in args.protocols.split(",") if part.strip())
+    return run_target(
+        args.target,
+        tools=tools,
+        flows=args.flows,
+        maxttl=args.maxttl,
+        protocols=protocols,
+        db=args.db,
+        output=args.output,
+        do_enrich=not args.no_enrich,
+        no_cache=args.no_cache,
+        text=args.text,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -259,44 +344,37 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--enrich", action="store_true", help="expand via BGP/PeeringDB sources")
-    common.add_argument("--budget", type=int, default=12, help="max interfaces to enrich")
-    common.add_argument("--no-sessions", action="store_true", help="skip RouteViews BGP sessions")
-    common.add_argument("--no-peeringdb", action="store_true", help="skip PeeringDB facilities/IXPs")
-    common.add_argument("--no-neighbours", action="store_true", help="skip RIPEstat AS neighbours")
-    common.add_argument("--no-alias", action="store_true", help="skip rDNS alias resolution")
-    common.add_argument("--no-geo", action="store_true", help="skip hop geolocation")
-    common.add_argument("--no-probes", action="store_true", help="skip RIPE Atlas probe counts")
+    common.add_argument("--no-enrich", action="store_true", help="skip AS/facility/BGP enrichment")
     common.add_argument("--no-cache", action="store_true", help="bypass the source-analysis disk cache")
 
-    trace = sub.add_parser("trace", parents=[common], help="capture a trace and build the graph")
+    trace = sub.add_parser("trace", parents=[common], help="ping + traceroute (all tools) then render HTML")
     trace.add_argument("target")
-    trace.add_argument("--tool", choices=["scamper", "dublin", "voyage"], default="scamper")
+    trace.add_argument("--tools", help="comma-separated tools (default: all available)")
     trace.add_argument("--protocols", default="udp", help="comma-separated Paris protocols: udp,icmp,tcp")
     trace.add_argument("--flows", type=int, default=4)
-    trace.add_argument("--maxttl", type=int, default=20)
+    trace.add_argument("--maxttl", type=int, default=32)
+    trace.add_argument("-o", "--output", help="HTML output path (default <target>.html)")
+    trace.add_argument("--text", action="store_true", help="print text summary instead of HTML")
     trace.set_defaults(func=cmd_trace)
 
     ing = sub.add_parser("ingest", parents=[common], help="ingest traceroute output from another tool")
     ing.add_argument("file")
     ing.add_argument("--tool", choices=list(ingest.TOOLS), required=True)
     ing.add_argument("--protocol", help="protocol label for the ingested hops")
-    ing.add_argument("--target", help="target IP (required for a new run)")
-    ing.add_argument("--vantage", help="source IP this trace ran from (for comparison)")
-    ing.add_argument("--captured-at", help="capture time (ISO 8601) if it differs from now")
-    ing.add_argument("--run-id", help="append to an existing run")
+    ing.add_argument("--target", required=True, help="target IP")
+    ing.add_argument("--vantage", help="source IP this trace ran from")
     ing.set_defaults(func=cmd_ingest)
 
-    show = sub.add_parser("show", help="list runs and graph sizes")
+    show = sub.add_parser("show", help="list runs")
     show.set_defaults(func=cmd_show)
 
-    topo = sub.add_parser("topology", help="print edges for a run")
-    topo.add_argument("run_id")
-    topo.set_defaults(func=cmd_topology)
+    clear = sub.add_parser("clear", help="empty the paths database (or one target)")
+    clear.add_argument("target", nargs="?", help="destination IP to remove; omit to remove everything")
+    clear.set_defaults(func=cmd_clear)
 
     html = sub.add_parser("html", help="render graph(s) as self-contained HTML")
-    html.add_argument("run_id", nargs="*", help="run id(s); omit with --target for one row per tool")
-    html.add_argument("--target", help="render the latest run per tool for this target, stacked")
+    html.add_argument("run_id", nargs="*", help="run id(s); omit with --target for one graph per tool")
+    html.add_argument("--target", help="render the latest run per tool for this target")
     html.add_argument("-o", "--output")
     html.set_defaults(func=cmd_html)
 
