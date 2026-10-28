@@ -68,6 +68,21 @@
   #panel .log-meta { color:var(--muted); font-size:12px; margin:4px 0 0; }
   #panel .missing { margin:8px 0 0; padding:8px 10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; color:#9a3412; font-size:12px; }
   #panel .missing ul { margin:4px 0 0; padding-left:16px; }
+  .muted { color:var(--muted); }
+  #viewnav { margin-top:10px; display:flex; gap:6px; }
+  #viewnav button { background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:5px; padding:4px 10px; cursor:pointer; font:inherit; }
+  #viewnav button[aria-selected="true"] { color:#fff; border-color:var(--blue); }
+  #viewnav button:disabled { opacity:.45; cursor:default; }
+  #dest-frame { width:100%; height:calc(100vh - 140px); border:1px solid var(--line); border-radius:10px; background:#fff; }
+  .card.dest dt[data-claim], .card.dest dd[data-claim] { cursor:pointer; }
+  .card.dest dt[data-claim]:hover, .card.dest dd[data-claim]:hover { color:var(--blue); }
+  #panel .obs { border:1px solid var(--line); border-radius:6px; margin:6px 0; }
+  #panel .obs > summary { cursor:pointer; padding:4px 6px; }
+  #panel .obs .obsbody { padding:0 6px 6px; }
+  #panel .obs pre { max-height:240px; overflow:auto; }
+  #panel .raw { margin-top:4px; }
+  #panel .raw > summary { cursor:pointer; color:var(--muted); }
+  #panel details summary { cursor:pointer; color:var(--muted); font-size:12.5px; }
   @media (max-width: 900px) {
     main { display:block; }
     #panel { width:auto; height:auto; position:static; border-left:0; border-top:1px solid var(--line); }
@@ -75,7 +90,7 @@
 </style>
 </head>
 <body>
-<header><h1>aranya · paths</h1><p>one graph per traceroute tool · click a method name for its stored hop log · click or focus a hop for details · click a link for its handoff</p></header>
+<header><h1>aranya · paths</h1><p>one graph per traceroute tool · click a method name for its stored hop log · click or focus a hop for details · click a link for its handoff</p><nav id="viewnav"><button id="nav-graphs" data-view="graphs" aria-selected="true">path</button><button id="nav-dest" data-view="dest" disabled>destination report</button></nav></header>
 <main>
   <div id="graphs">
     <div class="card legend">
@@ -94,6 +109,7 @@
       </details>
     </div>
   </div>
+  <iframe id="dest-frame" title="destination report" hidden></iframe>
   <div id="panel"><h3>selection</h3><div class="empty">click a method name for its log, a hop for details, or a link for its handoff</div></div>
 </main>
 <script>
@@ -346,28 +362,116 @@ function renderDest(d){
   if (!d) return null;
   const card = document.createElement("div");
   card.className = "card dest";
-  const rows = [];
-  const add = (label, value) => {
-    if (value != null && value !== "") rows.push(`<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`);
+  const dl = document.createElement("dl");
+  const claimByKey = {};
+  if (DEST) for (const c of (DEST.claims||[])) claimByKey[c.topic+"."+c.key] = c;
+  const add = (label, value, key) => {
+    if (value == null || value === "") return;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    const claim = key ? claimByKey[key] : null;
+    if (claim){
+      dt.setAttribute("data-claim", key); dd.setAttribute("data-claim", key);
+      const open = ()=>showDestClaim(claim);
+      dt.addEventListener("click", open); dd.addEventListener("click", open);
+    }
+    dl.append(dt, dd);
   };
   const location = d.anycast_like && d.location_labels && d.location_labels.length > 1
     ? `anycast — ${d.location_labels.slice(0,6).join(" · ")}${d.location_labels.length > 6 ? " · …" : ""} (${d.location_values} values)`
     : (d.location || null);
-  add("location", location);
-  add("prefix", d.prefix);
-  add("AS", asLabel(d.asn, d.name));
-  add("RPKI", d.rpki);
-  add("announces", d.announced != null ? d.announced + " prefixes" : null);
-  add("upstream AS", d.upstream_as ? "AS" + d.upstream_as : null);
-  add("observed at", d.observers && d.observers.length ? d.observers.slice(0,8).map(o=>o.source+":"+o.location).join(", ") : null);
-  card.innerHTML = `<h2>destination · ${esc(d.ip)}</h2><dl>${rows.join("")}</dl>`;
+  add("location", location, "location.claim");
+  add("prefix", d.prefix, "ownership.prefix");
+  add("AS", asLabel(d.asn, d.name), "ownership.asn");
+  add("RPKI", d.rpki, "routing.rpki");
+  add("announces", d.announced != null ? d.announced + " prefixes" : null, "routing.announced-count");
+  add("upstream AS", d.upstream_as ? "AS" + d.upstream_as : null, null);
+  card.append(el("h2", "", "destination · " + d.ip), dl);
   return card;
+}
+
+const DEST = (DATA.dest && DATA.dest.report) || null;
+const DEST_HTML = (DATA.dest && DATA.dest.report_html) || null;
+const VCOLOR = {agree:"#16a34a",single:"#64748b",spread:"#ea580c",disagree:"#dc2626",dissent:"#b91c1c",multi:"#a16207",no_data:"#64748b",error:"#be185d",skipped:"#6b7280",absent:"#94a3b8"};
+const VLABEL = (DEST && DEST.verdict_labels) || {agree:"agree",single:"single",spread:"set",disagree:"disagree"};
+function el(tag, cls, text){ const n=document.createElement(tag); if(cls) n.className=cls; if(text!==undefined) n.textContent=text; return n; }
+
+function showDestClaim(c){
+  const p = document.getElementById("panel");
+  const chip = `<span style="display:inline-block;padding:0 6px;border-radius:3px;color:#fff;font-weight:700;background:${VCOLOR[c.verdict]||"#64748b"}">${esc(VLABEL[c.verdict]||c.verdict)}</span>`;
+  let html = `<h3>${esc(c.label)} ${chip}</h3>`;
+  if (c.description) html += `<div class="meta">${esc(c.description)}</div>`;
+  html += `<div class="meta">${c.n_sources} source(s), ${c.n_upstreams} upstream(s); verdict over upstreams</div>`;
+  html += `<div class="meta"><span style="font-weight:600">${esc(c.headline || c.consensus || "")}</span></div>`;
+  if (c.explanation) html += `<div class="meta">${esc(c.explanation)}</div>`;
+  for (const lab of (c.labels||[])){
+    html += `<div><span style="font-weight:600">${esc(lab.label)}</span> <span class="meta">[${esc((lab.sources||[]).join(", "))}]</span></div>`;
+  }
+  for (const s of (c.multi||[])){
+    html += `<div class="meta">${esc(s)}* ${(c.source_labels[s]||[]).length} values: ${esc((c.source_labels[s]||[]).slice(0,8).join(", "))}</div>`;
+  }
+  const obs = (DEST.observations||[]).filter(o=>o.ip===c.ip && o.topic===c.topic && o.key===c.key);
+  const bySrc = {};
+  for (const o of obs) (bySrc[o.source]=bySrc[o.source]||[]).push(o);
+  const sources = [...new Set([...(c.sources||[]), ...Object.keys(bySrc)])].sort();
+  html += `<dl><dt>observations</dt></dl>`;
+  if (!obs.length) html += `<div class="meta">(no embedded observations for this claim)</div>`;
+  for (const s of sources){
+    const list = bySrc[s]||[];
+    const state = (DEST.states||[]).find(x=>x.ip===c.ip && x.topic===c.topic && x.key===c.key && x.source===s);
+    html += `<details class="obs" open><summary><span style="font-weight:600">${esc(s)}</span> <span class="meta">${state ? state.state+" · " : ""}${list.length} observation(s)</span></summary><div class="obsbody">`;
+    if (list.length){
+      const meta = [list[0].upstream, list[0].evidence_class, list[0].observed_at].filter(Boolean).join(" · ");
+      if (meta) html += `<div class="meta">${esc(meta)}</div>`;
+      for (const o of list){
+        html += `<pre class="log">${esc(typeof o.value==="string" ? o.value : JSON.stringify(o.value, null, 2))}</pre>`;
+      }
+    }
+    const ids = [...new Set(list.map(o=>o.fetch_id).filter(id=>id!=null))];
+    const fts = ids.map(id=>(DEST.fetches||[]).find(f=>f.id===id)).filter(Boolean);
+    for (const f of fts){
+      html += `<details class="raw"><summary>raw source · fetch ${f.id} · ${esc(f.status==null?"?":f.status)}${f.error ? " · "+esc(f.error) : ""}</summary>`;
+      html += `<div class="meta">${esc(f.url||"(no endpoint recorded)")}</div>`;
+      if (Object.prototype.hasOwnProperty.call(f,"body") && f.body !== null){
+        html += `<pre class="log">${esc(String(f.body))}</pre>`;
+      } else {
+        html += `<div class="meta">no raw body</div>`;
+      }
+      html += `</details>`;
+    }
+    html += `</div></details>`;
+  }
+  p.innerHTML = html;
 }
 
 const container = document.getElementById("graphs");
 const dest = renderDest(DATA.dest);
 if (dest) container.appendChild(dest);
 for (const g of DATA.graphs){ container.appendChild(renderGraph(g)); }
+
+const navGraphs = document.getElementById("nav-graphs");
+const navDest = document.getElementById("nav-dest");
+const graphsEl = document.getElementById("graphs");
+const destFrame = document.getElementById("dest-frame");
+const panelEl = document.getElementById("panel");
+function setView(view){
+  const isDest = view === "dest";
+  navGraphs.setAttribute("aria-selected", isDest ? "false" : "true");
+  navDest.setAttribute("aria-selected", isDest ? "true" : "false");
+  graphsEl.hidden = isDest;
+  destFrame.hidden = !isDest;
+  panelEl.hidden = isDest;
+  if (!isDest) panelEl.innerHTML = `<h3>selection</h3><div class="empty">click a method name for its log, a hop for details, or a link for its handoff</div>`;
+}
+if (DEST_HTML){
+  navDest.disabled = false;
+  destFrame.srcdoc = DEST_HTML;
+}
+navGraphs.addEventListener("click", ()=>setView("graphs"));
+navDest.addEventListener("click", ()=>setView("dest"));
+
 </script>
 </body>
 </html>

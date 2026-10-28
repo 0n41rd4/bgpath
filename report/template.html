@@ -3,35 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aranya report</title>
+<title>aranya · report</title>
 <style>
   :root {
-    --agree:#1b5e20; --single:#5b6470; --spread:#b26a00; --disagree:#b71c1c;
-    --no_data:#5b6470; --error:#880e4f; --skipped:#4a4a4a; --absent:#3a424c; --absent-tint:#20262e;
-    --bg:#11151c; --panel:#1b2129; --ink:#e6e9ee; --muted:#9aa4b2; --line:#2b333d; --accent:#3d7bd6;
+    --agree:#16a34a; --single:#64748b; --spread:#ea580c; --disagree:#dc2626;
+    --no_data:#64748b; --error:#be185d; --skipped:#6b7280; --absent:#94a3b8; --absent-tint:#f1f5f9;
+    --bg:#f8fafc; --panel:#ffffff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#2563eb;
+    --head-bg:#0f172a; --head-ink:#ffffff; --head-muted:#cbd5e1;
   }
   * { box-sizing: border-box; }
-  body { margin:0; font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  body { margin:0; font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
          background:var(--bg); color:var(--ink); }
   button { font:inherit; }
-  header { padding:12px 18px; border-bottom:1px solid var(--line); position:sticky; top:0;
-           background:var(--bg); z-index:10; }
-  h1 { font-size:15px; margin:0 0 8px; }
+  header { padding:14px 20px; border-bottom:1px solid #1e293b; position:sticky; top:0;
+           background:var(--head-bg); color:var(--head-ink); z-index:10; }
+  h1 { font-size:16px; margin:0 0 4px; }
+  header .muted { color:var(--head-muted); }
   .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  .controls label { color:var(--muted); }
+  .controls label { color:var(--head-muted); }
   .controls .ctl { display:flex; gap:6px; align-items:center; }
   .controls .ctl.disabled { opacity:.35; pointer-events:none; }
-  select,input { background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  select,input { background:#1e293b; color:var(--head-ink); border:1px solid #334155;
                  border-radius:4px; padding:3px 6px; font:inherit; }
   nav { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
-  nav button { background:var(--panel); color:var(--muted); border:1px solid var(--line);
+  nav button { background:#1e293b; color:var(--head-muted); border:1px solid #334155;
                border-radius:5px; padding:4px 10px; cursor:pointer; }
-  nav button[aria-selected="true"] { color:var(--ink); border-color:var(--accent); }
+  nav button[aria-selected="true"] { color:var(--head-ink); border-color:var(--accent); }
   main { padding:12px 18px 60px; }
   section { display:none; } section.active { display:block; }
   .strip { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0 0 12px; }
   .strip button { border:1px solid var(--line); border-radius:4px; padding:2px 9px; cursor:pointer;
-                  background:var(--panel); color:var(--ink); }
+                   background:var(--panel); color:var(--ink); }
   .strip button[aria-pressed="true"] { border-color:var(--accent); }
   .strip .muted { margin-left:6px; }
   .glyph { font-weight:700; }
@@ -43,14 +45,14 @@
             vertical-align:middle; color:#fff; text-align:center; line-height:11px; font-size:9px; }
   .group { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
            margin:16px 0 7px; font-weight:600; }
-  .card { border:1px solid var(--line); border-radius:6px; margin:0 0 10px; background:var(--panel); }
+  .card { border:1px solid var(--line); border-radius:8px; margin:0 0 10px; background:var(--panel); }
   .card > summary { cursor:pointer; padding:8px 10px; display:flex; gap:10px; align-items:baseline; }
-  .card > summary .name { font-weight:700; min-width:20ch; }
+  .card > summary .name { font-weight:600; min-width:20ch; }
   .card > summary .cons { flex:1; }
   .card .body { padding:8px 10px 12px; border-top:1px solid var(--line); }
   .labelrow { padding:3px 8px; border-left:3px solid transparent; border-radius:3px; }
-  .labelrow.top { border-left-color:var(--agree); background:rgba(27,94,32,.22); }
-  .wrap { overflow:auto; max-height:72vh; border:1px solid var(--line); border-radius:6px; }
+  .labelrow.top { border-left-color:var(--agree); background:rgba(22,163,74,.10); }
+  .wrap { overflow:auto; max-height:72vh; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
   table.matrix { border-collapse:separate; border-spacing:0; font-size:12px; }
   table.matrix th, table.matrix td { padding:2px 7px; border-bottom:1px solid var(--line); }
   table.matrix th { color:var(--muted); font-weight:400; text-align:left; position:sticky; top:0;
@@ -66,16 +68,16 @@
   td.gap { text-align:center; color:var(--muted); }
   .muted { color:var(--muted); }
   .routing { color:var(--accent); font-weight:600; font-size:12.5px; margin:2px 0 6px; }
-  code { background:#0c0f14; padding:1px 5px; border-radius:3px; }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:3px; }
   #drawer { position:fixed; top:0; right:0; width:min(560px,90vw); height:100%; overflow:auto;
             background:var(--panel); border-left:1px solid var(--line); padding:14px 16px;
-            box-shadow:-8px 0 24px rgba(0,0,0,.4); display:none; z-index:20; }
+            box-shadow:-8px 0 24px rgba(15,23,42,.25); display:none; z-index:20; }
   #drawer.open { display:block; }
   #drawer h2 { font-size:13px; margin:0 0 8px; }
   #drawer .desc { margin:0 0 8px; }
-  #drawer pre { white-space:pre-wrap; word-break:break-word; background:#0c0f14; padding:8px;
+  #drawer pre { white-space:pre-wrap; word-break:break-word; background:#f1f5f9; padding:8px;
                 border-radius:4px; margin:4px 0; }
-  .obs { border:1px solid var(--line); border-radius:4px; margin:6px 0; }
+  .obs { border:1px solid var(--line); border-radius:6px; margin:6px 0; }
   .obs > summary { cursor:pointer; padding:5px 7px; }
   .obsbody { padding:0 7px 7px; }
   .obs pre { max-height:240px; overflow:auto; }
@@ -83,18 +85,18 @@
   details.raw > summary { color:var(--muted); cursor:pointer; }
   details.raw pre { max-height:360px; overflow:auto; }
   #drawer .close { position:absolute; top:10px; right:12px; background:var(--panel); color:var(--ink);
-                   border:1px solid var(--line); border-radius:4px; padding:2px 9px; cursor:pointer; }
-  .bar-track { position:relative; height:12px; background:#0c0f14; border-radius:2px; overflow:hidden; }
+                    border:1px solid var(--line); border-radius:4px; padding:2px 9px; cursor:pointer; }
+  .bar-track { position:relative; height:12px; background:#f1f5f9; border-radius:2px; overflow:hidden; }
   .bar-seg { position:absolute; top:0; height:12px; }
   .stack { display:grid; grid-template-columns: minmax(14ch,max-content) 1fr max-content; gap:4px 10px;
-           align-items:center; }
+            align-items:center; }
   .dim { opacity:.5; }
-  .geo { background:#0d1b2a; border:1px solid var(--line); border-radius:6px; }
+  .geo { background:#eef4fb; border:1px solid var(--line); border-radius:8px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>aranya report <span class="muted" id="meta"></span></h1>
+  <h1>aranya · report <span class="muted" id="meta"></span></h1>
   <div class="controls">
     <div class="ctl" id="ctl-ip"><label for="f-ip">ip</label>
       <select id="f-ip"></select></div>
@@ -133,11 +135,11 @@
 "use strict";
 const DATA = JSON.parse(document.getElementById("aranya-data").textContent || "null");
 const LAND = /*__ARANYA_LAND__*/null;
-const COLOR = {agree:"#1b5e20",single:"#5b6470",spread:"#b26a00",disagree:"#b71c1c",
-  dissent:"#8e0000",multi:"#7a4a00",no_data:"#5b6470",error:"#880e4f",skipped:"#4a4a4a",absent:"#3a424c"};
-const TINT = {agree:"rgba(27,94,32,.30)",single:"rgba(91,100,112,.22)",spread:"rgba(178,106,0,.30)",
-  disagree:"rgba(183,28,28,.32)",dissent:"rgba(142,0,0,.34)",multi:"rgba(122,74,0,.32)",
-  no_data:"rgba(91,100,112,.14)",error:"rgba(136,14,79,.34)",skipped:"rgba(74,74,74,.28)",
+const COLOR = {agree:"#16a34a",single:"#64748b",spread:"#ea580c",disagree:"#dc2626",
+  dissent:"#b91c1c",multi:"#a16207",no_data:"#64748b",error:"#be185d",skipped:"#6b7280",absent:"#94a3b8"};
+const TINT = {agree:"rgba(22,163,74,.10)",single:"rgba(100,116,139,.10)",spread:"rgba(234,88,12,.12)",
+  disagree:"rgba(220,38,38,.10)",dissent:"rgba(185,28,28,.12)",multi:"rgba(161,98,7,.12)",
+  no_data:"rgba(100,116,139,.08)",error:"rgba(190,24,93,.12)",skipped:"rgba(107,114,128,.10)",
   absent:"transparent"};
 const GLYPH = {agree:"=",single:"\u00b7",spread:"~",disagree:"\u2260",dissent:"\u00d7",
   multi:"\u2261",no_data:"?",error:"\u2717",skipped:"\u2205",absent:""};
@@ -444,14 +446,14 @@ function renderGeo(f){
   const svg=document.createElementNS(svgNS,"svg"); svg.setAttribute("viewBox","0 0 360 180");
   svg.setAttribute("width","100%"); svg.setAttribute("class","geo");
   if (typeof LAND==="string" && LAND.length){ const land=document.createElementNS(svgNS,"path");
-    land.setAttribute("d",LAND); land.setAttribute("fill","#20303f"); land.setAttribute("stroke","#2f4456");
+    land.setAttribute("d",LAND); land.setAttribute("fill","#dbeafe"); land.setAttribute("stroke","#93c5fd");
     land.setAttribute("stroke-width","0.2"); svg.append(land); }
   for (let lon=-180; lon<=180; lon+=30){ const l=document.createElementNS(svgNS,"line");
     l.setAttribute("x1",lon+180); l.setAttribute("y1",0); l.setAttribute("x2",lon+180); l.setAttribute("y2",180);
-    l.setAttribute("stroke","#2b333d"); l.setAttribute("stroke-width","0.2"); svg.append(l); }
+    l.setAttribute("stroke","#e2e8f0"); l.setAttribute("stroke-width","0.2"); svg.append(l); }
   for (let lat=-90; lat<=90; lat+=30){ const l=document.createElementNS(svgNS,"line");
     l.setAttribute("x1",0); l.setAttribute("y1",90-lat); l.setAttribute("x2",360); l.setAttribute("y2",90-lat);
-    l.setAttribute("stroke","#2b333d"); l.setAttribute("stroke-width","0.2"); svg.append(l); }
+    l.setAttribute("stroke","#e2e8f0"); l.setAttribute("stroke-width","0.2"); svg.append(l); }
   const ipSel = DATA.ips.includes(f.ip) ? f.ip : null;
   const palette=["#4fc3f7","#ffb74d","#81c784","#e57373","#ba68c8","#fff176"];
   const groups={};

@@ -13,7 +13,10 @@ tools can disagree, so they are never merged.
    and shows where it is, its prefix, origin AS and RPKI state at the top of the
    HTML report (`--no-dest` skips this). When the destination geolocates to
    several distinct cities (anycast), the header lists them instead of picking
-   one.
+   one. The full `aranya --html` report for the destination is embedded and
+   reachable via the **destination report** toggle in the header. The header
+   fields are clickable: each one opens its claim provenance (per-source values,
+   observations and raw fetches) in the side panel.
 1. **vantage** — the public egress IP is fetched from an echo service
    (`api.ipify.org` / `ifconfig.me` / `ipv4.icanhazip.com`) because NAT hides it
    locally. The graph starts there, skipping the private LAN gateway.
@@ -60,7 +63,7 @@ tools can disagree, so they are never merged.
 
 aranya path 41.222.2.1                       # same as `trace`, via the aranya CLI
 aranya path 41.222.2.1 --tools scamper,dublin -o paths.html
-aranya path 41.222.2.1 --exclude voyage       # run everything but the slow voyage
+aranya path 41.222.2.1 --exclude voyage       # run everything but voyage
 aranya path --clear                           # empty the path database
 aranya path --clear 41.222.2.1                # remove just that target
 ```

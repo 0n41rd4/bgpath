@@ -114,15 +114,14 @@ def build(conn, run_id: str) -> dict:
     nodes = _nodes(conn)
     edges = _edges(conn, run_id)
     hop_ttl = _hop_ttl(conn, run_id)
-    ttl = hop_ttl
     rtt = _hop_rtt(conn, run_id)
     raw = _raw_hops(conn, run_id)
     endpoints = {edge["source"] for edge in edges} | {edge["target"] for edge in edges}
-    if endpoints:
-        ttl = {ip: value for ip, value in ttl.items() if ip in endpoints}
-        vantage = run.get("vantage")
-        if vantage and vantage in endpoints and vantage not in hop_ttl:
-            ttl[vantage] = 0
+    vantage = run.get("vantage")
+    ttl = {vantage: 0} if vantage else {}
+    for ip, value in hop_ttl.items():
+        if ip in endpoints:
+            ttl[ip] = value
 
     columns: dict[int, list[str]] = {}
     for ip in ttl:

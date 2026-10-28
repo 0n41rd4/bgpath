@@ -112,7 +112,7 @@ def destination_summary(target: str, db: str | None = None, verbose: bool = Fals
     """
     import aranya
     from registry import store as raw_store
-    from report import aggregate, asn as asn_report
+    from report import aggregate, asn as asn_report, export as report_export
 
     sources.load_env()
     conn = raw_store.open_store(db or aranya._default_db())
@@ -121,6 +121,8 @@ def destination_summary(target: str, db: str | None = None, verbose: bool = Fals
         summaries = aggregate.cell_summaries(conn, target)
         location = _destination_location(conn, target)
         routing = asn_report.routing_summary(conn, target)
+        report = report_export.build(conn, [target], with_observations=True)
+        report_html = report_export.render_html(report)
     finally:
         conn.close()
 
@@ -156,6 +158,8 @@ def destination_summary(target: str, db: str | None = None, verbose: bool = Fals
         "announced": announced,
         "upstream_as": upstream,
         "observers": observers,
+        "report": report,
+        "report_html": report_html,
     }
 
 
