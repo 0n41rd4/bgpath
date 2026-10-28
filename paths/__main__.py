@@ -126,7 +126,6 @@ def destination_summary(target: str, db: str | None = None, verbose: bool = Fals
 
     dest_asn = _consensus_of(summaries, "ownership", "asn") or routing.get("origin_asn")
     upstream = routing.get("upstream_as")
-    next_hops = routing.get("next_hops") or []
     announced = routing.get("announced")
     observers = routing.get("observers") or []
 
@@ -138,22 +137,24 @@ def destination_summary(target: str, db: str | None = None, verbose: bool = Fals
 
     loc_summary = by.get(("location", "claim"))
     location_values = 0
+    location_labels: list[str] = []
     if loc_summary:
         location_values = sum(loc_summary.get("counts", {}).values()) or len(loc_summary.get("labels", []))
+        location_labels = [label["label"] for label in loc_summary.get("labels", [])]
 
     return {
         "ip": target,
         "location": location or consensus("location", "claim"),
         "location_verdict": loc_summary["verdict_label"] if loc_summary else None,
-        "anycast_like": location_values > 1,
+        "anycast_like": len(location_labels) > 1,
         "location_values": location_values,
+        "location_labels": location_labels,
         "prefix": consensus("ownership", "prefix"),
         "asn": dest_asn,
         "name": consensus("ownership", "holder") or consensus("ownership", "name"),
         "rpki": consensus("routing", "rpki"),
         "announced": announced,
         "upstream_as": upstream,
-        "next_hops": next_hops,
         "observers": observers,
     }
 

@@ -102,6 +102,8 @@ const NW = 150, NH = 34;
 
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
+function asLabel(asn, name){ return name ? (asn ? name + " AS" + asn : name) : (asn ? "AS" + asn : ""); }
+
 function pingText(p){
   if (!p) return "ping: n/a";
   if (p.reachable) return `ping: ok (avg ${p.rtt_avg_ms ?? "?"} ms)`;
@@ -180,7 +182,8 @@ function renderGraph(g){
     g2.setAttribute("tabindex","0");
     g2.setAttribute("focusable","true");
     g2.setAttribute("role","button");
-    g2.setAttribute("aria-label",`${hop.id}${hop.as_name ? ", "+hop.as_name : ""}`);
+    const asLabelText = asLabel(hop.asn, hop.as_name);
+    g2.setAttribute("aria-label",`${hop.id}${asLabelText ? ", "+asLabelText : ""}`);
     const tip = document.createElementNS("http://www.w3.org/2000/svg","title");
     tip.textContent = "Click for hop details";
     const rect = document.createElementNS("http://www.w3.org/2000/svg","rect");
@@ -190,8 +193,7 @@ function renderGraph(g){
     t1.textContent = hop.id;
     const t2 = document.createElementNS("http://www.w3.org/2000/svg","text");
     t2.setAttribute("class","as"); t2.setAttribute("x",8); t2.setAttribute("y",28);
-    const asText = hop.as_name || (hop.asn ? "AS"+hop.asn : "");
-    t2.textContent = asText + (hop.mpls && hop.mpls.length ? " · MPLS" : "");
+    t2.textContent = asLabelText + (hop.mpls && hop.mpls.length ? " · MPLS" : "");
     g2.appendChild(tip); g2.appendChild(rect); g2.appendChild(t1); g2.appendChild(t2);
     const select = () => {
       svg.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
@@ -253,8 +255,7 @@ function showNode(h){
   };
   found("TTL", h.ttl);
   found("RTT", h.rtt_ms == null ? null : Number(h.rtt_ms).toFixed(3) + " ms");
-  const as = h.as_name ? (h.asn ? h.as_name+" (AS"+h.asn+")" : h.as_name) : (h.asn ? "AS"+h.asn : null);
-  found("AS", as);
+  found("AS", asLabel(h.asn, h.as_name));
   found("prefix", h.prefix);
   found("hostname", h.hostname);
   found("country", h.country);
@@ -297,6 +298,10 @@ function showEdge(e){
       `</ul></dd>`);
   } else {
     missing.push("AS-path adjacency");
+  }
+  if (h.next_hop){
+    const nh = h.next_hop;
+    rows.push(`<dt>next hop</dt><dd>${esc(nh.ip)} — advertised by AS${esc(nh.asn)} (${esc(nh.source)}${nh.detail ? " · " + esc(nh.detail) : ""})</dd>`);
   }
   const ris = h.ris || {};
   if (h.neighbours){
@@ -345,17 +350,15 @@ function renderDest(d){
   const add = (label, value) => {
     if (value != null && value !== "") rows.push(`<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`);
   };
-  const location = d.location
-    ? d.location + (d.anycast_like ? ` (${d.location_values} values)` : "")
-    : null;
+  const location = d.anycast_like && d.location_labels && d.location_labels.length > 1
+    ? `anycast — ${d.location_labels.slice(0,6).join(" · ")}${d.location_labels.length > 6 ? " · …" : ""} (${d.location_values} values)`
+    : (d.location || null);
   add("location", location);
   add("prefix", d.prefix);
-  add("origin ASN", d.asn ? "AS" + d.asn : null);
-  add("network", d.name);
+  add("AS", asLabel(d.asn, d.name));
   add("RPKI", d.rpki);
   add("announces", d.announced != null ? d.announced + " prefixes" : null);
   add("upstream AS", d.upstream_as ? "AS" + d.upstream_as : null);
-  add("next hop", d.next_hops && d.next_hops.length ? d.next_hops.join(", ") : null);
   add("observed at", d.observers && d.observers.length ? d.observers.slice(0,8).map(o=>o.source+":"+o.location).join(", ") : null);
   card.innerHTML = `<h2>destination · ${esc(d.ip)}</h2><dl>${rows.join("")}</dl>`;
   return card;

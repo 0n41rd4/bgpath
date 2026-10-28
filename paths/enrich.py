@@ -52,6 +52,13 @@ def _geo(ip: str, asn_info: dict) -> dict:
     return {"country": country, "city": city, "latitude": lat, "longitude": lon}
 
 
+def _ip_equal(a: str, b: str) -> bool:
+    try:
+        return ipaddress.ip_address(a) == ipaddress.ip_address(b)
+    except ValueError:
+        return a == b
+
+
 def _geo_match(a: dict, b: dict) -> dict:
     same_country = bool(a["country"] and b["country"] and a["country"] == b["country"])
     distance = topology.distance_km(
@@ -227,6 +234,16 @@ def _expand(conn, run_id, graph, target: str) -> dict:
             announces = bgp.owns(int(a_asn), target)
         except Exception:
             announces = None
+        next_hop = next(
+            (
+                entry
+                for entry in paths
+                if entry.get("next_hop") is not None
+                and _ip_equal(entry["next_hop"], dst)
+                and entry.get("next_hop_asn") == a_asn
+            ),
+            None,
+        )
         confirmed = bool(adjacency) and geo["match"]
         handoff = {
             "from_as": a_asn,
@@ -246,6 +263,16 @@ def _expand(conn, run_id, graph, target: str) -> dict:
                 "v4_peers": relation.get("v4_peers") if relation else None,
                 "v6_peers": relation.get("v6_peers") if relation else None,
             },
+            "next_hop": (
+                {
+                    "ip": dst,
+                    "asn": next_hop.get("next_hop_asn"),
+                    "source": next_hop.get("source"),
+                    "detail": next_hop.get("detail"),
+                }
+                if next_hop
+                else None
+            ),
             "geo": geo,
             "confirmed": confirmed,
         }

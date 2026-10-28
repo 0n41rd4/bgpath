@@ -209,8 +209,6 @@ def _ip_report(conn, ip: str, paint: Paint) -> list[str]:
         routing_bits.append(f"announces {routing['announced']} prefixes")
     if routing.get("upstream_as"):
         routing_bits.append(f"upstream AS{routing['upstream_as']}")
-    if routing.get("next_hops"):
-        routing_bits.append("next hop " + ", ".join(routing["next_hops"][:3]))
     if routing_bits:
         lines.append(f"  {'AS routing':<16} " + " · ".join(routing_bits))
     if routing.get("observers"):

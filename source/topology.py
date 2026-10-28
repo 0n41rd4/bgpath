@@ -79,11 +79,14 @@ def target_paths(ip: str, prefix: str | None = None, with_bgproutes: bool = True
                 if not as_path:
                     continue
                 location = " ".join(part for part in (rrc.get("rrc"), rrc.get("location")) if part)
+                tokens = as_path_tokens(as_path)
                 paths.append(
                     {
                         "source": "RIPE RIS",
                         "as_path": as_path,
                         "detail": location or "RIS",
+                        "next_hop": peer.get("next_hop"),
+                        "next_hop_asn": tokens[0] if tokens else None,
                     }
                 )
     except Exception:

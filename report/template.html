@@ -336,7 +336,6 @@ function renderClaims(f){
     const bits=[];
     if (rt.announced!=null) bits.push("announces "+rt.announced+" prefixes");
     if (rt.upstream_as) bits.push("upstream AS"+rt.upstream_as);
-    if (rt.next_hops&&rt.next_hops.length) bits.push("next hop "+rt.next_hops.slice(0,3).join(", "));
     if (bits.length) host.append(el("p","routing", bits.join(" · ")));
     if (rt.observers&&rt.observers.length){
       host.append(el("p","muted","observed at: "+rt.observers.slice(0,8).map(o=>o.source+":"+o.location).join(" | ")));

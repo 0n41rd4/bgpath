@@ -10,8 +10,10 @@ tools can disagree, so they are never merged.
 ## Flow
 
 0. **destination** — first runs the full `aranya <IP>` lookup on the destination
-   and shows where it is, its prefix, origin ASN and RPKI state at the top of the
-   HTML report (`--no-dest` skips this).
+   and shows where it is, its prefix, origin AS and RPKI state at the top of the
+   HTML report (`--no-dest` skips this). When the destination geolocates to
+   several distinct cities (anycast), the header lists them instead of picking
+   one.
 1. **vantage** — the public egress IP is fetched from an echo service
    (`api.ipify.org` / `ifconfig.me` / `ipv4.icanhazip.com`) because NAT hides it
    locally. The graph starts there, skipping the private LAN gateway.
@@ -36,6 +38,10 @@ tools can disagree, so they are never merged.
    whether the two hop IPs are geographically consistent. A link is marked as a
    **confirmed peering** (green) when adjacency and geography both agree; the
    details (sources, AS paths, countries, distance) show when clicking the link.
+   When the source AS of an inter-AS edge advertises a BGP next hop toward the
+   destination that *is* the far-side IP of that edge, the edge records it as
+   next-hop evidence — the global next-hop list is not shown (it is only
+   meaningful where our path actually meets it).
    The AS-path evidence reuses the same adapters/parsers/cache as `aranya <IP>`
    via `source/topology.py`.
 
