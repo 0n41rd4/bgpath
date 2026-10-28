@@ -76,6 +76,8 @@
   #dest-frame { width:100%; height:calc(100vh - 140px); border:1px solid var(--line); border-radius:10px; background:#fff; }
   .card.dest dt[data-claim], .card.dest dd[data-claim] { cursor:pointer; }
   .card.dest dt[data-claim]:hover, .card.dest dd[data-claim]:hover { color:var(--blue); }
+  #panel dt[data-prov], #panel dd[data-prov] { cursor:pointer; }
+  #panel dt[data-prov]:hover, #panel dd[data-prov]:hover { color:var(--blue); }
   #panel .obs { border:1px solid var(--line); border-radius:6px; margin:6px 0; }
   #panel .obs > summary { cursor:pointer; padding:4px 6px; }
   #panel .obs .obsbody { padding:0 6px 6px; }
@@ -176,7 +178,7 @@ function renderGraph(g){
     hit.setAttribute("class","hit"); hit.setAttribute("x1",x1); hit.setAttribute("y1",y1); hit.setAttribute("x2",x2); hit.setAttribute("y2",y2);
     const line = document.createElementNS("http://www.w3.org/2000/svg","line");
     line.setAttribute("class","line"); line.setAttribute("x1",x1); line.setAttribute("y1",y1); line.setAttribute("x2",x2); line.setAttribute("y2",y2);
-    g2.addEventListener("click", ()=>showEdge(e));
+    g2.addEventListener("click", ()=>showEdge(e, g));
     g2.appendChild(hit); g2.appendChild(line);
 
     if (e.gap && e.span > 1){
@@ -265,22 +267,33 @@ function showNode(h){
   const p = document.getElementById("panel");
   const rows = [];
   const missing = [];
+  provList = h.provenance || [];
   const found = (label, value) => {
     if (value == null || value === "") { missing.push(label); return; }
     rows.push(`<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`);
   };
+  const prov = (label, value, sources) => {
+    if (value == null || value === "") { missing.push(label); return; }
+    if ((h.provenance||[]).some(f=>sources.includes(f.source))){
+      const attr = `data-prov-label="${esc(label)}" data-prov="${esc(sources.join(","))}"`;
+      rows.push(`<dt ${attr}>${esc(label)}</dt><dd ${attr}>${esc(value)}</dd>`);
+    } else {
+      found(label, value);
+    }
+  };
   found("TTL", h.ttl);
   found("RTT", h.rtt_ms == null ? null : Number(h.rtt_ms).toFixed(3) + " ms");
-  found("AS", asLabel(h.asn, h.as_name));
-  found("prefix", h.prefix);
-  found("hostname", h.hostname);
-  found("country", h.country);
-  found("city", h.city);
+  prov("AS", asLabel(h.asn, h.as_name), AS_SOURCES);
+  prov("prefix", h.prefix, AS_SOURCES);
+  prov("hostname", h.hostname, ["rdns.ptr", "internetdb"]);
+  prov("country", h.country, GEO_SOURCES);
+  prov("city", h.city, GEO_SOURCES);
   found("IXP", h.ixp);
   found("MPLS labels", h.mpls && h.mpls.length ? h.mpls.map(m=>typeof m === "object" ? JSON.stringify(m) : m).join(", ") : null);
   if (h.bgp_asn != null){
     const agree = h.asn != null && String(h.bgp_asn) === String(h.asn);
-    rows.push(`<dt>bgp.tools</dt><dd>AS${esc(h.bgp_asn)}${h.bgp_prefix ? " · " + esc(h.bgp_prefix) : ""}${h.bgp_country ? " · " + esc(h.bgp_country) : ""}${agree ? " · agrees" : " · differs"}</dd>`);
+    const value = `AS${h.bgp_asn}${h.bgp_prefix ? " · " + h.bgp_prefix : ""}${h.bgp_country ? " · " + h.bgp_country : ""}${agree ? " · agrees" : " · differs"}`;
+    prov("bgp.tools", value, ["bgp.tools"]);
   }
   if (h.latitude != null && h.longitude != null){
     found("coordinates", Number(h.latitude).toFixed(4) + ", " + Number(h.longitude).toFixed(4));
@@ -291,12 +304,13 @@ function showNode(h){
   p.innerHTML = `<h3>${esc(h.id)}</h3><dl>` + rows.join("") + `</dl>` + missingHtml;
 }
 
-function showEdge(e){
+function showEdge(e, g){
   document.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
   const p = document.getElementById("panel");
   const h = e.handoff || {};
   const rows = [];
   const missing = [];
+  provList = (g && g.target_fetches) || [];
   const title = h.confirmed ? "confirmed peering" : "inter-AS link";
   rows.push(`<dt>link</dt><dd>${esc(e.from_as ? "AS"+e.from_as : "?")} → ${esc(e.to_as ? "AS"+e.to_as : "?")}</dd>`);
 
@@ -309,24 +323,30 @@ function showEdge(e){
   }
 
   if (h.adjacency && h.adjacency.length){
-    rows.push(`<dt>observed adjacency</dt><dd><ul>` +
-      h.adjacency.map(a=>`<li>${esc(a.source)}${a.vp_label ? " · " + esc(a.vp_label) : ""} · <code>${esc(a.as_path)}</code></li>`).join("") +
+    const pair = `${h.from_as} ${h.to_as}`;
+    const rev = `${h.to_as} ${h.from_as}`;
+    const hl = (path) => {
+      let s = esc(path);
+      if (s.includes(pair)) s = s.replace(pair, `<b>${pair}</b>`);
+      else if (s.includes(rev)) s = s.replace(rev, `<b>${rev}</b>`);
+      return s;
+    };
+    rows.push(`<dt data-prov-label="observed adjacency" data-prov="${esc(BGP_SOURCES.join(","))}">observed adjacency</dt><dd class="meta">AS paths toward the destination (route collectors) where AS${esc(h.from_as)} → AS${esc(h.to_as)} are adjacent:</dd><dd><ul>` +
+      h.adjacency.map(a=>`<li>${esc(a.source)}${a.vp_label ? " · " + esc(a.vp_label) : ""} · <code>${hl(a.as_path)}</code></li>`).join("") +
       `</ul></dd>`);
   } else {
     missing.push("AS-path adjacency");
   }
   if (h.next_hop){
     const nh = h.next_hop;
-    rows.push(`<dt>next hop</dt><dd>${esc(nh.ip)} — advertised by AS${esc(nh.asn)} (${esc(nh.source)}${nh.detail ? " · " + esc(nh.detail) : ""})</dd>`);
+    rows.push(`<dt data-prov-label="next hop" data-prov="ris.looking-glass">next hop</dt><dd>${esc(nh.ip)} — advertised by AS${esc(nh.asn)} (${esc(nh.source)}${nh.detail ? " · " + esc(nh.detail) : ""})</dd>`);
   }
   const ris = h.ris || {};
   if (h.neighbours){
     const bits = [];
-    if (ris.type) bits.push(ris.type);
-    if (ris.power != null) bits.push("power " + ris.power);
     if (ris.v4_peers != null) bits.push(ris.v4_peers + " v4 peers");
     if (ris.v6_peers != null) bits.push(ris.v6_peers + " v6 peers");
-    rows.push(`<dt>RIS neighbour</dt><dd>yes${bits.length ? " · " + esc(bits.join(" · ")) : ""}</dd>`);
+    rows.push(`<dt>RIS neighbour</dt><dd>yes — AS${esc(h.from_as)} ↔ AS${esc(h.to_as)}${bits.length ? " · " + esc(bits.join(" · ")) : ""}</dd>`);
   } else {
     rows.push(`<dt>RIS neighbour</dt><dd>no</dd>`);
     missing.push("RIS neighbour pair");
@@ -341,12 +361,25 @@ function showEdge(e){
   }
 
   if (h.facilities && h.facilities.length){
-    rows.push(`<dt>shared facilities</dt><dd><ul>` + h.facilities.map(f=>`<li>${esc(f.name)}${f.city ? " · "+esc(f.city) : ""}</li>`).join("") + `</ul></dd>`);
+    const countries = new Set([geo.src_country, geo.dst_country].filter(Boolean));
+    const near = h.facilities.filter(f=>countries.has(f.country));
+    const rest = h.facilities.length - near.length;
+    const loc = f => f.city ? (f.city + (f.country ? ", " + f.country : "")) : (f.country || "");
+    let items = near.map(f=>`<li>${esc(f.name)}${loc(f) ? " · " + esc(loc(f)) : ""}</li>`).join("");
+    if (!near.length && rest) items = `<li class="meta">${rest} shared facilities, none near this link</li>`;
+    else if (rest) items += `<li class="meta">+${rest} elsewhere</li>`;
+    rows.push(`<dt>shared facilities</dt><dd><ul>${items}</ul></dd>`);
   } else {
     missing.push("shared facilities");
   }
   if (h.ixps && h.ixps.length){
-    rows.push(`<dt>shared IXPs</dt><dd><ul>` + h.ixps.map(x=>`<li>${esc(x.name)}</li>`).join("") + `</ul></dd>`);
+    const local = new Set([(h.ixp && h.ixp.src), (h.ixp && h.ixp.dst)].filter(Boolean));
+    const near = h.ixps.filter(x=>local.has(x.name));
+    const rest = h.ixps.length - near.length;
+    let items = near.map(x=>`<li>${esc(x.name)}</li>`).join("");
+    if (!near.length && rest) items = `<li class="meta">${rest} shared IXPs, none local to this link</li>`;
+    else if (rest) items += `<li class="meta">+${rest} elsewhere</li>`;
+    rows.push(`<dt>shared IXPs</dt><dd><ul>${items}</ul></dd>`);
   } else {
     missing.push("shared IXPs");
   }
@@ -396,6 +429,27 @@ const DEST = (DATA.dest && DATA.dest.report) || null;
 const DEST_HTML = (DATA.dest && DATA.dest.report_html) || null;
 const VCOLOR = {agree:"#16a34a",single:"#64748b",spread:"#ea580c",disagree:"#dc2626",dissent:"#b91c1c",multi:"#a16207",no_data:"#64748b",error:"#be185d",skipped:"#6b7280",absent:"#94a3b8"};
 const VLABEL = (DEST && DEST.verdict_labels) || {agree:"agree",single:"single",spread:"set",disagree:"disagree"};
+const AS_SOURCES = ["cymru.origin", "ripestat.network-info", "bgp.tools"];
+const GEO_SOURCES = ["ipwho.is", "ip.guide"];
+const BGP_SOURCES = ["routeviews.prefix", "ris.looking-glass", "bgproutes.prefix"];
+let provList = [];
+function showProvenance(label, fetches){
+  const p = document.getElementById("panel");
+  let html = `<h3>${esc(label)}</h3>`;
+  if (!fetches || !fetches.length){
+    html += `<div class="meta">no raw fetch recorded for this field (served from cache or not captured)</div>`;
+    p.innerHTML = html;
+    return;
+  }
+  for (const f of fetches){
+    html += `<details class="obs" open><summary><span style="font-weight:600">${esc(f.source)}</span> <span class="meta">${esc(f.status==null?"?":f.status)}${f.error ? " · "+esc(f.error) : ""}</span></summary><div class="obsbody">`;
+    html += `<div class="meta">${esc(f.url||"(no endpoint recorded)")}</div>`;
+    if (f.body != null && f.body !== "") html += `<pre class="log">${esc(String(f.body))}</pre>`;
+    else html += `<div class="meta">no raw body</div>`;
+    html += `</div></details>`;
+  }
+  p.innerHTML = html;
+}
 function el(tag, cls, text){ const n=document.createElement(tag); if(cls) n.className=cls; if(text!==undefined) n.textContent=text; return n; }
 
 function showDestClaim(c){
@@ -471,6 +525,13 @@ if (DEST_HTML){
 }
 navGraphs.addEventListener("click", ()=>setView("graphs"));
 navDest.addEventListener("click", ()=>setView("dest"));
+document.getElementById("panel").addEventListener("click", (ev) => {
+  const t = ev.target.closest("[data-prov]");
+  if (!t) return;
+  const label = t.getAttribute("data-prov-label") || "provenance";
+  const sources = (t.getAttribute("data-prov") || "").split(",").filter(Boolean);
+  showProvenance(label, provList.filter(f=>sources.includes(f.source)));
+});
 
 </script>
 </body>

@@ -108,6 +108,17 @@ def _raw_hops(conn, run_id: str) -> list[dict]:
     ]
 
 
+def _fetches(conn) -> list[dict]:
+    rows = conn.execute(
+        "SELECT ip, source, url, status, error, body, fetched_at FROM fetches ORDER BY id"
+    ).fetchall()
+    return [
+        {"ip": ip, "source": source, "url": url, "status": status,
+         "error": error, "body": body, "fetched_at": fetched_at}
+        for ip, source, url, status, error, body, fetched_at in rows
+    ]
+
+
 def build(conn, run_id: str) -> dict:
     run = _run(conn, run_id)
     target = run.get("target")
@@ -116,6 +127,11 @@ def build(conn, run_id: str) -> dict:
     hop_ttl = _hop_ttl(conn, run_id)
     rtt = _hop_rtt(conn, run_id)
     raw = _raw_hops(conn, run_id)
+    fetch_by_ip: dict[str, list[dict]] = {}
+    for fetch in _fetches(conn):
+        ip = fetch.get("ip")
+        if ip:
+            fetch_by_ip.setdefault(ip, []).append(fetch)
     endpoints = {edge["source"] for edge in edges} | {edge["target"] for edge in edges}
     vantage = run.get("vantage")
     ttl = {vantage: 0} if vantage else {}
@@ -167,6 +183,7 @@ def build(conn, run_id: str) -> dict:
                 "mpls": mpls_by_ip.get(ip, []),
                 "is_target": ip == target,
                 "rtt_ms": rtt.get(ip),
+                "provenance": fetch_by_ip.get(ip, []),
             }
         )
 
@@ -215,6 +232,7 @@ def build(conn, run_id: str) -> dict:
         "hops": hops,
         "edges": out_edges,
         "raw": raw,
+        "target_fetches": fetch_by_ip.get(target, []),
     }
 
 
