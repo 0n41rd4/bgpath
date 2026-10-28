@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 import urllib.request
 
@@ -28,7 +29,8 @@ import registry.sources as sources
 DEFAULT_DB = "paths.db"
 
 NATIVE_TOOLS = ("scamper", "dublin", "voyage")
-ALL_TOOLS = NATIVE_TOOLS + ("mtr", "traceroute")
+TOOL_TIMEOUTS = {"scamper": 180, "dublin": 180, "voyage": 300, "mtr": 120, "traceroute": 120}
+ALL_TOOLS = ("mtr", "traceroute") + NATIVE_TOOLS
 RETRY_TTL = 64
 
 
@@ -58,6 +60,14 @@ def _build_interface(conn, run_id, vantage=None):
 
 def _available_tools() -> list[str]:
     return [tool for tool in ALL_TOOLS if probe.available(tool)]
+
+
+def _resolve_tools(tools_arg: str | None, exclude_arg: str | None) -> list[str]:
+    tools = [p.strip() for p in tools_arg.split(",") if p.strip()] if tools_arg else list(_available_tools())
+    if exclude_arg:
+        drop = {p.strip() for p in exclude_arg.split(",") if p.strip()}
+        tools = [tool for tool in tools if tool not in drop]
+    return tools
 
 
 def _observed(hops: list[dict]) -> int:
@@ -234,6 +244,12 @@ def run_target(
         public_ip = None
     run_ids: list[str] = []
     for tool in tools:
+        if verbose:
+            print(
+                f"  {tool}: probing (timeout {TOOL_TIMEOUTS.get(tool, '?')}s) ...",
+                file=sys.stderr,
+                flush=True,
+            )
         try:
             started, hops, meta = _capture_tool(tool, target, flows, maxttl, protocols)
         except Exception as exc:
@@ -294,7 +310,7 @@ def run_target(
 
 
 def cmd_trace(args) -> int:
-    tools = [part.strip() for part in args.tools.split(",") if part.strip()] if args.tools else None
+    tools = _resolve_tools(args.tools, args.exclude)
     protocols = tuple(part.strip() for part in args.protocols.split(",") if part.strip())
     return run_target(
         args.target,
@@ -418,7 +434,8 @@ def run_path(argv: list[str] | None = None) -> int:
     sources.load_env()
     parser = argparse.ArgumentParser(prog="aranya path", description="ping + traceroute a target and render HTML")
     parser.add_argument("target", nargs="?", help="destination IP")
-    parser.add_argument("--tools", help="comma-separated: scamper,dublin,voyage,mtr,traceroute (default: all available)")
+    parser.add_argument("--tools", help="comma-separated: mtr,traceroute,scamper,dublin,voyage (default: all available)")
+    parser.add_argument("--exclude", help="comma-separated tools to drop from the default set")
     parser.add_argument("--flows", type=int, default=4)
     parser.add_argument("--maxttl", type=int, default=32)
     parser.add_argument("--protocols", default="udp", help="comma-separated Paris protocols: udp,icmp,tcp")
@@ -455,7 +472,7 @@ def run_path(argv: list[str] | None = None) -> int:
         return 0
     if not args.target:
         parser.error("a target is required unless --clear is used")
-    tools = [part.strip() for part in args.tools.split(",") if part.strip()] if args.tools else None
+    tools = _resolve_tools(args.tools, args.exclude)
     protocols = tuple(part.strip() for part in args.protocols.split(",") if part.strip())
     return run_target(
         args.target,
@@ -486,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
     trace = sub.add_parser("trace", parents=[common], help="ping + traceroute (all tools) then render HTML")
     trace.add_argument("target")
     trace.add_argument("--tools", help="comma-separated tools (default: all available)")
+    trace.add_argument("--exclude", help="comma-separated tools to drop from the default set")
     trace.add_argument("--protocols", default="udp", help="comma-separated Paris protocols: udp,icmp,tcp")
     trace.add_argument("--flows", type=int, default=4)
     trace.add_argument("--maxttl", type=int, default=32)

@@ -2,7 +2,8 @@
 
 `python -m paths trace <ip>` (or `aranya path <ip>`) pings the destination, then
 traceroutes it regardless of the ping result, with **every available tool**:
-scamper, dublin-traceroute, voyage, mtr and traceroute. Each tool is stored as its
+mtr, traceroute, scamper, dublin-traceroute and voyage (mtr/traceroute run first
+because they finish fast and reliably). Each tool is stored as its
 own run, and the default output is an HTML report with **one graph per tool** —
 tools can disagree, so they are never merged.
 
@@ -53,6 +54,7 @@ tools can disagree, so they are never merged.
 
 aranya path 41.222.2.1                       # same as `trace`, via the aranya CLI
 aranya path 41.222.2.1 --tools scamper,dublin -o paths.html
+aranya path 41.222.2.1 --exclude voyage       # run everything but the slow voyage
 aranya path --clear                           # empty the path database
 aranya path --clear 41.222.2.1                # remove just that target
 ```
