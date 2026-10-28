@@ -300,6 +300,10 @@ def _asn_neighbours_obs(ip: str, parsed: dict) -> list[dict]:
     ]
 
 
+def _announced_prefixes_obs(ip: str, parsed: dict) -> list[dict]:
+    return [_obs("routing", "announced-count", parsed["count"])]
+
+
 def _ipmap_obs(ip: str, parsed: dict) -> list[dict]:
     return [_obs("location", "claim", loc) for loc in parsed["locations"]]
 
@@ -573,6 +577,7 @@ def _ris_obs(ip: str, parsed: dict) -> list[dict]:
                     "peers": len(rrc["peers"]),
                     "prefixes": sorted({peer.get("prefix") for peer in rrc["peers"] if peer.get("prefix")}),
                     "paths": sorted({peer.get("as_path") for peer in rrc["peers"] if peer.get("as_path")}),
+                    "next_hops": sorted({peer.get("next_hop") for peer in rrc["peers"] if peer.get("next_hop")}),
                 },
             )
         )
@@ -764,6 +769,17 @@ SOURCES: list[dict] = [
         "url": lambda ctx: f"https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS{ctx['asn']}",
         "parse": ripe.asn_neighbours,
         "observations": _asn_neighbours_obs,
+        "provides": lambda parsed: {},
+    },
+    {
+        "id": "ripestat.announced-prefixes",
+        "upstream": "RIPE NCC (RIS)",
+        "evidence_class": "observed-passive",
+        "needs": ["asn"],
+        "scope": "as",
+        "url": lambda ctx: f"https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{ctx['asn']}",
+        "parse": ripe.announced_prefixes,
+        "observations": _announced_prefixes_obs,
         "provides": lambda parsed: {},
     },
     {

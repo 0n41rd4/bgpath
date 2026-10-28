@@ -324,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "path":
         from paths import __main__ as paths_cli
         return paths_cli.run_path(argv[1:])
+    if argv and argv[0] == "as":
+        from source import asn
+        return asn.run_as(argv[1:])
     sources.load_env()
     parser = argparse.ArgumentParser(description="aranya phase 1 prototype")
     parser.add_argument("ip", nargs="?", help="IP address to look up")

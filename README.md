@@ -7,7 +7,7 @@ the full brief.
 
 Phase 1 (fetch + raw store + observations), phase 2 (comparison + HTML report),
 phase 3 (more sources), phase 4 (entity normalization) and phase 5 (cross-IP
-analysis) are implemented. 22 always-on sources query an IP in dependency waves,
+analysis) are implemented. 23 always-on sources query an IP in dependency waves,
 plus 2 PeeringDB follow-ups and 6 optional sources; raw responses land in the
 `fetches` table, normalized claims in the `observations` table.
 
@@ -52,6 +52,8 @@ aranya --report --ips 8.8.8.8,1.1.1.1          # comparison table
 aranya --export FILE [--ips 8.8.8.8,...]       # write the JSON contract (no fetch)
 aranya --html FILE [--ips 8.8.8.8,...]         # write a self-contained HTML report
 aranya 8.8.8.8 --entities                      # ownership entity + aliases
+aranya as 3356                                 # prefixes AS3356 announces (RIPEstat + RouteViews)
+aranya as 3356 --prefix 171.75.0.0/16          # where one prefix is observed (collectors/VPs + PeeringDB)
 aranya path 8.8.8.8                            # aranya lookup + traceroute (all tools) -> HTML report
 aranya path --clear                            # empty the path database
 aranya path --clear 8.8.8.8                    # remove just that target's path runs

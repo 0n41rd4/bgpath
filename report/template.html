@@ -65,6 +65,7 @@
   td.cell:focus { outline:2px solid var(--accent); outline-offset:-2px; }
   td.gap { text-align:center; color:var(--muted); }
   .muted { color:var(--muted); }
+  .routing { color:var(--accent); font-weight:600; font-size:12.5px; margin:2px 0 6px; }
   code { background:#0c0f14; padding:1px 5px; border-radius:3px; }
   #drawer { position:fixed; top:0; right:0; width:min(560px,90vw); height:100%; overflow:auto;
             background:var(--panel); border-left:1px solid var(--line); padding:14px 16px;
@@ -330,6 +331,17 @@ function renderClaims(f){
   if (!ip){ host.append(el("p","muted","no data")); return; }
   if (!list.length){ host.append(el("p","muted","no claims match the filter")); return; }
   host.append(el("p","muted", list.length+" claim(s) for "+ip));
+  const rt=(DATA.as_routing||[]).find(r=>r.ip===ip);
+  if (rt){
+    const bits=[];
+    if (rt.announced!=null) bits.push("announces "+rt.announced+" prefixes");
+    if (rt.upstream_as) bits.push("upstream AS"+rt.upstream_as);
+    if (rt.next_hops&&rt.next_hops.length) bits.push("next hop "+rt.next_hops.slice(0,3).join(", "));
+    if (bits.length) host.append(el("p","routing", bits.join(" · ")));
+    if (rt.observers&&rt.observers.length){
+      host.append(el("p","muted","observed at: "+rt.observers.slice(0,8).map(o=>o.source+":"+o.location).join(" | ")));
+    }
+  }
   let group="";
   for (const c of list){
     const claimGroup=c.group||"other";

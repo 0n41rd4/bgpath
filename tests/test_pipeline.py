@@ -33,6 +33,8 @@ def make_fetch():
             body = (RIPE / "as-overview.json").read_text()
         elif "asn-neighbours" in url:
             body = (RIPE / "asn-neighbours.json").read_text()
+        elif "announced-prefixes" in url:
+            body = (RIPE / "announced-prefixes.json").read_text()
         elif "ipmap.ripe.net" in url:
             body = (RIPE / "ipmap.json").read_text()
         elif "cymru" in url:

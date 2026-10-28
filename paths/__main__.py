@@ -91,24 +91,34 @@ def _capture_tool(tool, target, flows, maxttl, protocols):
     return started, hops, meta
 
 
-def destination_summary(target: str, db: str | None = None) -> dict:
+def destination_summary(target: str, db: str | None = None, verbose: bool = False) -> dict:
     """Run the `aranya <IP>` lookup on the destination and reduce it to a header.
 
     Reuses the main aranya pipeline (`aranya.run_all`) and the report's claim
     aggregation (`report.aggregate.cell_summaries`) so the path report shows the
-    same facts the standalone lookup does.
+    same facts the standalone lookup does. The lookup always targets the aranya
+    <IP> database (`ARANYA_DB` / `~/.local/share/aranya/aranya.db`), independent
+    of the paths store, so both tools share the same observations.
     """
     import aranya
     from registry import store as raw_store
-    from report import aggregate
+    from report import aggregate, asn as asn_report
 
     sources.load_env()
     conn = raw_store.open_store(db or aranya._default_db())
     try:
-        aranya.run_all(conn, target)
+        aranya.run_all(conn, target, verbose=verbose)
         summaries = aggregate.cell_summaries(conn, target)
+        location = _destination_location(conn, target)
+        routing = asn_report.routing_summary(conn, target)
     finally:
         conn.close()
+
+    dest_asn = _consensus_of(summaries, "ownership", "asn") or routing.get("origin_asn")
+    upstream = routing.get("upstream_as")
+    next_hops = routing.get("next_hops") or []
+    announced = routing.get("announced")
+    observers = routing.get("observers") or []
 
     by = {(summary["topic"], summary["key"]): summary for summary in summaries}
 
@@ -116,21 +126,53 @@ def destination_summary(target: str, db: str | None = None) -> dict:
         summary = by.get((topic, key))
         return summary["consensus"] if summary else None
 
-    location = by.get(("location", "claim"))
+    loc_summary = by.get(("location", "claim"))
     location_values = 0
-    if location:
-        location_values = sum(location.get("counts", {}).values()) or len(location.get("labels", []))
+    if loc_summary:
+        location_values = sum(loc_summary.get("counts", {}).values()) or len(loc_summary.get("labels", []))
+
     return {
         "ip": target,
-        "location": consensus("location", "claim"),
-        "location_verdict": location["verdict_label"] if location else None,
+        "location": location or consensus("location", "claim"),
+        "location_verdict": loc_summary["verdict_label"] if loc_summary else None,
         "anycast_like": location_values > 1,
         "location_values": location_values,
         "prefix": consensus("ownership", "prefix"),
-        "asn": consensus("ownership", "asn"),
+        "asn": dest_asn,
         "name": consensus("ownership", "holder") or consensus("ownership", "name"),
         "rpki": consensus("routing", "rpki"),
+        "announced": announced,
+        "upstream_as": upstream,
+        "next_hops": next_hops,
+        "observers": observers,
     }
+
+
+def _consensus_of(summaries: list[dict], topic: str, key: str) -> str | None:
+    for summary in summaries:
+        if summary["topic"] == topic and summary["key"] == key:
+            return summary["consensus"]
+    return None
+
+
+def _destination_location(conn, ip: str) -> str | None:
+    """Prefer a city+country, then a country, over bare coordinates."""
+    city_country = None
+    country_only = None
+    for _source, _key, value in conn.execute(
+        "SELECT source, key, value FROM v_observations WHERE ip = ? AND topic = 'location'", (ip,)
+    ):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            continue
+        city = value.get("city")
+        country = value.get("country")
+        if city and country and city_country is None:
+            city_country = f"{city}, {country}"
+        elif country and not city and country_only is None:
+            country_only = country
+    return city_country or country_only
 
 
 def run_target(
@@ -145,6 +187,7 @@ def run_target(
     no_cache: bool = False,
     text: bool = False,
     do_dest: bool = True,
+    verbose: bool = False,
 ) -> int:
     if no_cache:
         os.environ["PATHS_CACHE"] = "off"
@@ -153,7 +196,7 @@ def run_target(
     if do_dest:
         try:
             print(f"aranya lookup: {target}")
-            dest = destination_summary(target)
+            dest = destination_summary(target, verbose=verbose)
             bits = [target]
             if dest.get("name"):
                 bits.append(f"{dest['name']}" + (f" (AS{dest['asn']})" if dest.get("asn") else ""))
@@ -265,6 +308,7 @@ def cmd_trace(args) -> int:
         no_cache=args.no_cache,
         text=args.text,
         do_dest=not args.no_dest,
+        verbose=args.verbose,
     )
 
 
@@ -383,6 +427,7 @@ def run_path(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-enrich", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--no-dest", action="store_true", help="skip the aranya lookup of the destination")
+    parser.add_argument("-v", "--verbose", action="store_true", help="show per-source progress on stderr")
     parser.add_argument("--text", action="store_true", help="print the text summary instead of HTML")
     parser.add_argument("--clear", nargs="?", const="", metavar="TARGET", help="empty the whole paths DB (or just TARGET) and exit")
     args = parser.parse_args(argv)
@@ -424,6 +469,7 @@ def run_path(argv: list[str] | None = None) -> int:
         no_cache=args.no_cache,
         text=args.text,
         do_dest=not args.no_dest,
+        verbose=args.verbose,
     )
 
 
@@ -446,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
     trace.add_argument("-o", "--output", help="HTML output path (default <target>.html)")
     trace.add_argument("--text", action="store_true", help="print text summary instead of HTML")
     trace.add_argument("--no-dest", action="store_true", help="skip the aranya lookup of the destination")
+    trace.add_argument("-v", "--verbose", action="store_true", help="show per-source progress on stderr")
     trace.set_defaults(func=cmd_trace)
 
     ing = sub.add_parser("ingest", parents=[common], help="ingest traceroute output from another tool")

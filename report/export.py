@@ -12,7 +12,7 @@ import sqlite3
 
 from registry import sources
 
-from report import aggregate, compare, labels, views
+from report import aggregate, asn, compare, labels, views
 
 SCHEMA_VERSION = 1
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.html")
@@ -161,6 +161,7 @@ def build(
         "locations": sorted(locations, key=lambda r: (r["ip"], r["source"], str(r["city"]))),
         "latency": sorted(latency, key=lambda r: (r["ip"], r["source"], str(r["city"]))),
         "source_summary": _source_summary(states),
+        "as_routing": [{"ip": ip, **asn.routing_summary(conn, ip)} for ip in ips],
         "fetches": sorted(fetch_index, key=lambda r: r["id"]),
     }
     if with_observations:

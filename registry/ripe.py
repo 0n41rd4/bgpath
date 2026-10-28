@@ -72,6 +72,16 @@ def asn_neighbours(body: str) -> dict:
     }
 
 
+def announced_prefixes(body: str) -> dict:
+    data = _ripestat_data(body)
+    prefixes = [
+        item.get("prefix")
+        for item in data.get("prefixes") or []
+        if isinstance(item, dict) and item.get("prefix")
+    ]
+    return {"prefixes": prefixes, "count": len(prefixes)}
+
+
 def looking_glass(body: str) -> dict:
     data = _ripestat_data(body)
     rrcs: list[dict] = []

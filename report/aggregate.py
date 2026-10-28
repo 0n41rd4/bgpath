@@ -144,6 +144,8 @@ def claim_label(topic: str, key: str, value: object, limit: int = 32) -> str:
         country = value.get("country")
         if city:
             text = f"{city}, {country}" if country else str(city)
+        elif country:
+            text = str(country)
         elif value.get("latitude") is not None:
             text = f"{value.get('latitude')},{value.get('longitude')}"
         else:

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from report import aggregate, entities, views
+from report import aggregate, asn, entities, views
 from report.labels import claim_name
 
 __all__ = ["claim_name", "report_view", "summary_view", "entities_view"]
@@ -202,6 +202,22 @@ def _ip_report(conn, ip: str, paint: Paint) -> list[str]:
         if ixps:
             parts.append(f"{_enum_count(ixps)} IXPs")
         lines.append(f"  {'AS footprint':<16} " + " · ".join(parts) + " (PeeringDB)")
+
+    routing = asn.routing_summary(conn, ip)
+    routing_bits = []
+    if routing.get("announced") is not None:
+        routing_bits.append(f"announces {routing['announced']} prefixes")
+    if routing.get("upstream_as"):
+        routing_bits.append(f"upstream AS{routing['upstream_as']}")
+    if routing.get("next_hops"):
+        routing_bits.append("next hop " + ", ".join(routing["next_hops"][:3]))
+    if routing_bits:
+        lines.append(f"  {'AS routing':<16} " + " · ".join(routing_bits))
+    if routing.get("observers"):
+        seen = [f"{obs['source']}:{obs['location']}" for obs in routing["observers"][:8]]
+        lines.append(f"  {'Observed at':<16} " + " | ".join(seen))
+        if len(routing["observers"]) > 8:
+            lines.append(f"  {'':<16} +{len(routing['observers']) - 8} more")
 
     if location:
         for source in location["multi"]:

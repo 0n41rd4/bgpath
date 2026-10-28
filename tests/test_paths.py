@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from registry import store as raw_store
 from source import bgp, query, topology
 
 import paths.analysis as analysis
@@ -286,6 +287,31 @@ class RetryTest(unittest.TestCase):
         self.assertEqual(meta["max_ttl"], 64)
         self.assertEqual(meta["retry_ttl"], 64)
 
+
+class DestinationTest(unittest.TestCase):
+    def test_destination_location_prefers_city(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = raw_store.open_store(os.path.join(tmp, "a.db"))
+            raw_store.save_observation(
+                conn, "8.8.8.8", "ipmap", "RIPE NCC", "inferred", "location", "claim",
+                {"city": "London", "country": "United Kingdom", "latitude": 51.5, "longitude": -0.1},
+            )
+            raw_store.save_observation(
+                conn, "8.8.8.8", "ripestat.geoloc", "RIPE NCC", "reported", "location", "claim",
+                {"city": "", "country": "GB", "latitude": 51.5, "longitude": -0.1},
+            )
+            self.assertEqual(paths_cli._destination_location(conn, "8.8.8.8"), "London, United Kingdom")
+            conn.close()
+
+    def test_destination_location_falls_back_to_country(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = raw_store.open_store(os.path.join(tmp, "a.db"))
+            raw_store.save_observation(
+                conn, "8.8.8.8", "ripestat.geoloc", "RIPE NCC", "reported", "location", "claim",
+                {"city": "", "country": "GB", "latitude": 51.5, "longitude": -0.1},
+            )
+            self.assertEqual(paths_cli._destination_location(conn, "8.8.8.8"), "GB")
+            conn.close()
 
 class PublicIpTest(unittest.TestCase):
     def test_get_public_ip(self):

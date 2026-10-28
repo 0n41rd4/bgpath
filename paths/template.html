@@ -19,6 +19,20 @@
   .card.dest dl { display:grid; grid-template-columns:auto 1fr; gap:2px 14px; margin:6px 0 0; font-size:13px; }
   .card.dest dt { color:var(--muted); font-weight:600; }
   .card.dest dd { margin:0; }
+  .card.legend { padding:8px 12px; font-size:12px; }
+  .card.legend summary { cursor:pointer; color:var(--muted); font-weight:600; }
+  .legend-list { list-style:none; margin:8px 0 0; padding:0; display:flex; flex-wrap:wrap; gap:6px 16px; }
+  .legend-list li { display:flex; align-items:center; gap:6px; }
+  .sw { display:inline-block; }
+  .sw.node { width:14px; height:9px; border-radius:3px; border:1.5px solid var(--gray); background:#fff; }
+  .sw.node.target { border-color:var(--green); background:#f0fdf4; }
+  .sw.node.selected { border-color:var(--blue); background:#eff6ff; }
+  .sw.edge { width:18px; border-top:2.5px solid transparent; }
+  .sw.edge.same { border-color:var(--gray); }
+  .sw.edge.cross { border-color:var(--blue); }
+  .sw.edge.peering { border-color:var(--green); }
+  .sw.edge.gap { border-top:2.5px dashed var(--gray); }
+  .sw.mpls { font:10px ui-monospace, monospace; color:var(--muted); }
   .method { appearance:none; border:0; background:none; padding:0; margin:0; font:inherit; color:inherit; text-align:left; cursor:pointer; }
   .method:hover { color:var(--blue); text-decoration:underline; }
   .method:focus-visible { outline:2px solid var(--blue); outline-offset:2px; border-radius:3px; }
@@ -63,7 +77,23 @@
 <body>
 <header><h1>aranya · paths</h1><p>one graph per traceroute tool · click a method name for its stored hop log · click or focus a hop for details · click a link for its handoff</p></header>
 <main>
-  <div id="graphs"></div>
+  <div id="graphs">
+    <div class="card legend">
+      <details open>
+        <summary>legend</summary>
+        <ul class="legend-list">
+          <li><span class="sw node"></span> hop</li>
+          <li><span class="sw node target"></span> destination</li>
+          <li><span class="sw node selected"></span> selected / hover</li>
+          <li><span class="sw edge same"></span> same AS</li>
+          <li><span class="sw edge cross"></span> inter-AS</li>
+          <li><span class="sw edge peering"></span> confirmed peering</li>
+          <li><span class="sw edge gap"></span> gap (unanswered TTLs) <code>+N</code></li>
+          <li><span class="sw mpls">· MPLS</span> MPLS labels</li>
+        </ul>
+      </details>
+    </div>
+  </div>
   <div id="panel"><h3>selection</h3><div class="empty">click a method name for its log, a hop for details, or a link for its handoff</div></div>
 </main>
 <script>
@@ -323,6 +353,10 @@ function renderDest(d){
   add("origin ASN", d.asn ? "AS" + d.asn : null);
   add("network", d.name);
   add("RPKI", d.rpki);
+  add("announces", d.announced != null ? d.announced + " prefixes" : null);
+  add("upstream AS", d.upstream_as ? "AS" + d.upstream_as : null);
+  add("next hop", d.next_hops && d.next_hops.length ? d.next_hops.join(", ") : null);
+  add("observed at", d.observers && d.observers.length ? d.observers.slice(0,8).map(o=>o.source+":"+o.location).join(", ") : null);
   card.innerHTML = `<h2>destination · ${esc(d.ip)}</h2><dl>${rows.join("")}</dl>`;
   return card;
 }
