@@ -14,6 +14,11 @@
   #graphs { flex:1 1 auto; padding: 16px; min-width:0; overflow-x:auto; }
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; margin-bottom:16px; padding:12px; }
   .card h2 { margin:0 0 4px; font-size:15px; }
+  .card.dest { background:#f8fafc; border-color:var(--line); }
+  .card.dest h2 { font-size:14px; }
+  .card.dest dl { display:grid; grid-template-columns:auto 1fr; gap:2px 14px; margin:6px 0 0; font-size:13px; }
+  .card.dest dt { color:var(--muted); font-weight:600; }
+  .card.dest dd { margin:0; }
   .method { appearance:none; border:0; background:none; padding:0; margin:0; font:inherit; color:inherit; text-align:left; cursor:pointer; }
   .method:hover { color:var(--blue); text-decoration:underline; }
   .method:focus-visible { outline:2px solid var(--blue); outline-offset:2px; border-radius:3px; }
@@ -37,8 +42,7 @@
   .edge.same .line { stroke:var(--gray); }
   .edge.cross .line { stroke:var(--blue); }
   .edge.peering .line { stroke:var(--green); stroke-width:2.5; }
-  .chip circle { fill:var(--blue); stroke:#fff; stroke-width:1.5; }
-  .chip text { fill:#fff; font-size:10px; text-anchor:middle; }
+  .gapcount { fill:var(--muted); font-size:10px; font-family:ui-monospace, monospace; pointer-events:none; }
   #panel { width:340px; flex:0 0 340px; padding:16px; position:sticky; top:0; height:100vh; overflow:auto; border-left:1px solid var(--line); background:#fff; }
   #panel h3 { margin:0 0 8px; font-size:14px; }
   #panel dl { margin:0; }
@@ -96,9 +100,15 @@ function renderGraph(g){
   title.appendChild(method);
   const meta = document.createElement("div");
   meta.className = "meta";
-  meta.innerHTML = `<span class="${g.reachability.reached ? "ok" : "bad"}">${esc(reachText(g.reachability))}</span> · ` +
-    `<span class="${g.ping && g.ping.reachable ? "ok" : "bad"}">${esc(pingText(g.ping))}</span> · ` +
-    `${esc(g.hops.length)} hops · ${esc(g.edges.length)} links`;
+  const asText = g.run.dest_asn
+    ? (g.run.reached_as
+        ? `<span class="ok">reached AS${esc(g.run.dest_asn)}</span>`
+        : `<span class="bad">did not reach AS${esc(g.run.dest_asn)}</span>`)
+    : "";
+  meta.innerHTML = `<span class="${g.reachability.reached ? "ok" : "bad"}">${esc(reachText(g.reachability))}</span>` +
+    (asText ? ` · ${asText}` : "") +
+    ` · <span class="${g.ping && g.ping.reachable ? "ok" : "bad"}">${esc(pingText(g.ping))}</span>` +
+    ` · ${esc(g.hops.length)} hops · ${esc(g.edges.length)} links`;
   card.appendChild(title); card.appendChild(meta);
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -121,21 +131,14 @@ function renderGraph(g){
     g2.addEventListener("click", ()=>showEdge(e));
     g2.appendChild(hit); g2.appendChild(line);
 
-    if (e.handoff){
-      const h = e.handoff;
-      const n = (h.facilities||[]).length + (h.ixps||[]).length + (h.announces_dest != null ? 1 : 0);
-      if (n > 0){
-        const mx = (x1+x2)/2, my = (y1+y2)/2;
-        const chip = document.createElementNS("http://www.w3.org/2000/svg","g");
-        chip.setAttribute("class","chip");
-        chip.setAttribute("transform",`translate(${mx},${my})`);
-        const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
-        c.setAttribute("r", 9);
-        const t = document.createElementNS("http://www.w3.org/2000/svg","text");
-        t.setAttribute("y", 3.5); t.textContent = n > 9 ? "·" : n;
-        chip.appendChild(c); chip.appendChild(t);
-        g2.appendChild(chip);
-      }
+    if (e.gap && e.span > 1){
+      const mx = (x1+x2)/2, my = (y1+y2)/2 - 6;
+      const label = document.createElementNS("http://www.w3.org/2000/svg","text");
+      label.setAttribute("class","gapcount");
+      label.setAttribute("x", mx); label.setAttribute("y", my);
+      label.setAttribute("text-anchor","middle");
+      label.textContent = "+" + (e.span - 1);
+      g2.appendChild(label);
     }
     svg.appendChild(g2);
   }
@@ -157,7 +160,8 @@ function renderGraph(g){
     t1.textContent = hop.id;
     const t2 = document.createElementNS("http://www.w3.org/2000/svg","text");
     t2.setAttribute("class","as"); t2.setAttribute("x",8); t2.setAttribute("y",28);
-    t2.textContent = hop.as_name || (hop.asn ? "AS"+hop.asn : "");
+    const asText = hop.as_name || (hop.asn ? "AS"+hop.asn : "");
+    t2.textContent = asText + (hop.mpls && hop.mpls.length ? " · MPLS" : "");
     g2.appendChild(tip); g2.appendChild(rect); g2.appendChild(t1); g2.appendChild(t2);
     const select = () => {
       svg.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
@@ -226,6 +230,7 @@ function showNode(h){
   found("country", h.country);
   found("city", h.city);
   found("IXP", h.ixp);
+  found("MPLS labels", h.mpls && h.mpls.length ? h.mpls.map(m=>typeof m === "object" ? JSON.stringify(m) : m).join(", ") : null);
   if (h.bgp_asn != null){
     const agree = h.asn != null && String(h.bgp_asn) === String(h.asn);
     rows.push(`<dt>bgp.tools</dt><dd>AS${esc(h.bgp_asn)}${h.bgp_prefix ? " · " + esc(h.bgp_prefix) : ""}${h.bgp_country ? " · " + esc(h.bgp_country) : ""}${agree ? " · agrees" : " · differs"}</dd>`);
@@ -302,7 +307,29 @@ function showEdge(e){
   p.innerHTML = `<h3>${esc(title)}</h3><dl>` + rows.join("") + `</dl>` + missingHtml;
 }
 
+function renderDest(d){
+  if (!d) return null;
+  const card = document.createElement("div");
+  card.className = "card dest";
+  const rows = [];
+  const add = (label, value) => {
+    if (value != null && value !== "") rows.push(`<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`);
+  };
+  const location = d.location
+    ? d.location + (d.anycast_like ? ` (${d.location_values} values)` : "")
+    : null;
+  add("location", location);
+  add("prefix", d.prefix);
+  add("origin ASN", d.asn ? "AS" + d.asn : null);
+  add("network", d.name);
+  add("RPKI", d.rpki);
+  card.innerHTML = `<h2>destination · ${esc(d.ip)}</h2><dl>${rows.join("")}</dl>`;
+  return card;
+}
+
 const container = document.getElementById("graphs");
+const dest = renderDest(DATA.dest);
+if (dest) container.appendChild(dest);
 for (const g of DATA.graphs){ container.appendChild(renderGraph(g)); }
 </script>
 </body>

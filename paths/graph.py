@@ -11,6 +11,8 @@ ECMP.
 
 from __future__ import annotations
 
+import ipaddress
+
 try:
     import networkx as nx
 except ImportError:
@@ -19,18 +21,36 @@ except ImportError:
 import paths.store as store
 
 
-def interface_graph(hops: list[dict]) -> "nx.DiGraph":
+def _is_global(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return False
+
+
+def interface_graph(hops: list[dict], vantage: str | None = None) -> "nx.DiGraph":
+    """Build the interface graph.
+
+    `vantage` is the probe's public egress IP (behind NAT it is not present in
+    the raw hops). When given, non-global hops (the private LAN gateway) are
+    dropped and `vantage` becomes the origin, connected to the first public hop
+    of each flow.
+    """
     if nx is None:
         raise RuntimeError("networkx is required for graph building")
     graph = nx.DiGraph()
+    if vantage:
+        graph.add_node(vantage)
     by_flow: dict[int, list[dict]] = {}
     for hop in hops:
+        if not hop.get("src_ip"):
+            continue
+        if vantage and not _is_global(hop["src_ip"]):
+            continue
         by_flow.setdefault(hop["flow_id"], []).append(hop)
     for flow_id, entries in by_flow.items():
         levels: dict[int, dict] = {}
         for hop in entries:
-            if not hop.get("src_ip"):
-                continue
             graph.add_node(hop["src_ip"])
             data = graph.nodes[hop["src_ip"]]
             data.setdefault("protocols", set())
@@ -45,6 +65,10 @@ def interface_graph(hops: list[dict]) -> "nx.DiGraph":
                 hop["rtt_ms"] is not None and (previous["rtt_ms"] is None or hop["rtt_ms"] < previous["rtt_ms"])
             ):
                 levels[ttl] = hop
+        if vantage and levels:
+            min_ttl = min(levels)
+            first = levels[min_ttl]
+            _add_edge(graph, vantage, first["src_ip"], flow_id, first, min_ttl)
         ttls = sorted(levels)
         for a_ttl, b_ttl in zip(ttls, ttls[1:]):
             previous, current = levels[a_ttl], levels[b_ttl]

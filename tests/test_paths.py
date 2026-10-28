@@ -136,6 +136,20 @@ class GraphTest(unittest.TestCase):
     def test_ecmp_fanout(self):
         self.assertIn("72.14.194.218", graphlib.ecmp_nodes(self.graph))
 
+    def test_vantage_origin_skips_private(self):
+        graph = graphlib.interface_graph(
+            [
+                {"flow_id": 1, "ttl": 1, "src_ip": "192.168.1.1", "rtt_ms": 1.0},
+                {"flow_id": 1, "ttl": 3, "src_ip": "93.184.216.34", "rtt_ms": 10.0},
+                {"flow_id": 1, "ttl": 4, "src_ip": "1.1.1.1", "rtt_ms": 20.0},
+            ],
+            vantage="8.8.8.8",
+        )
+        self.assertNotIn("192.168.1.1", graph)
+        self.assertIn("8.8.8.8", graph)
+        self.assertTrue(graph.has_edge("8.8.8.8", "93.184.216.34"))
+        self.assertFalse(graph.has_edge("192.168.1.1", "93.184.216.34"))
+
     def test_gap_edge_stays_within_flow(self):
         self.assertTrue(self.graph["190.215.80.1"]["190.196.124.214"]["gap"])
         self.assertTrue(self.graph.has_edge("192.168.1.254", "190.215.80.1"))
@@ -258,10 +272,10 @@ class RetryTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "p.db")
-            with mock.patch.object(probe, "capture_ping", return_value={"reachable": True, "rtt_avg_ms": 1.0, "loss_percent": 0}),                  mock.patch.object(paths_cli, "_capture_tool", side_effect=[first, second]) as capture:
+            with mock.patch.object(probe, "capture_ping", return_value={"reachable": True, "rtt_avg_ms": 1.0, "loss_percent": 0}),                  mock.patch.object(paths_cli, "get_public_ip", return_value=None),                  mock.patch.object(paths_cli, "_capture_tool", side_effect=[first, second]) as capture:
                 with contextlib.redirect_stdout(io.StringIO()):
                     code = paths_cli.run_target(
-                        TARGET, tools=["traceroute"], db=db, do_enrich=False, text=True
+                        TARGET, tools=["traceroute"], db=db, do_enrich=False, text=True, do_dest=False
                     )
             self.assertEqual(code, 0)
             self.assertEqual(capture.call_count, 2)
@@ -271,6 +285,26 @@ class RetryTest(unittest.TestCase):
             conn.close()
         self.assertEqual(meta["max_ttl"], 64)
         self.assertEqual(meta["retry_ttl"], 64)
+
+
+class PublicIpTest(unittest.TestCase):
+    def test_get_public_ip(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"1.2.3.4\n"
+
+        with mock.patch("urllib.request.urlopen", return_value=Response()):
+            self.assertEqual(paths_cli.get_public_ip(), "1.2.3.4")
+
+    def test_get_public_ip_falls_through_to_none(self):
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("no network")):
+            self.assertIsNone(paths_cli.get_public_ip())
 
 
 class BgpTest(unittest.TestCase):
@@ -391,6 +425,31 @@ class ExportTest(unittest.TestCase):
         self.assertEqual([f["name"] for f in edge["handoff"]["facilities"]], ["Equinix X"])
         self.assertNotIn("/*__PATHS_DATA__*/", html)
         self.assertIn("Equinix X", html)
+
+    @unittest.skipUnless(HAVE_NX, "networkx not installed")
+    def test_vantage_positioned_at_ttl_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = store.open_store(os.path.join(tmp, "p.db"))
+            store.save_run(
+                conn,
+                {"run_id": "r1", "target": TARGET, "src_ip": "8.8.8.8", "tool": "scamper", "started_at": "t", "meta": {}},
+            )
+            store.save_hops(
+                conn,
+                "r1",
+                [
+                    {"flow_id": 0, "ttl": 1, "src_ip": "192.168.1.1", "is_last": False},
+                    {"flow_id": 0, "ttl": 3, "src_ip": "93.184.216.34", "is_last": True},
+                ],
+            )
+            graph = graphlib.interface_graph(store.load_hops(conn, "r1"), vantage="8.8.8.8")
+            graphlib.persist(conn, "r1", graph)
+            data = paths_export.build(conn, "r1")
+            conn.close()
+        ttl_by_id = {hop["id"]: hop["ttl"] for hop in data["hops"]}
+        self.assertEqual(ttl_by_id["8.8.8.8"], 0)
+        self.assertIn("93.184.216.34", ttl_by_id)
+        self.assertNotIn("192.168.1.1", ttl_by_id)
 
     def test_build_hides_off_path_nodes(self):
         with tempfile.TemporaryDirectory() as tmp:

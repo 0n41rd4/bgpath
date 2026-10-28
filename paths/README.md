@@ -8,19 +8,25 @@ tools can disagree, so they are never merged.
 
 ## Flow
 
-1. **ping** — `probe.capture_ping` (system `ping -c N -n`), stored in the run meta.
-2. **traceroute** — all available tools, each its own run; `--maxttl` defaults to
+0. **destination** — first runs the full `aranya <IP>` lookup on the destination
+   and shows where it is, its prefix, origin ASN and RPKI state at the top of the
+   HTML report (`--no-dest` skips this).
+1. **vantage** — the public egress IP is fetched from an echo service
+   (`api.ipify.org` / `ifconfig.me` / `ipv4.icanhazip.com`) because NAT hides it
+   locally. The graph starts there, skipping the private LAN gateway.
+2. **ping** — `probe.capture_ping` (system `ping -c N -n`), stored in the run meta.
+3. **traceroute** — all available tools, each its own run; `--maxttl` defaults to
    `32` because long paths often exceed the usual 20. If a trace hits that cap
    without reaching the target, it is retried **once** at TTL `64` (not `mtr`).
    `--tools` limits the set, and `ingest` imports previously-captured output.
-3. **graph** — `graph.py` joins each flow's answered hops into an interface
+4. **graph** — `graph.py` joins each flow's answered hops into an interface
    topology. Missing TTLs are bridged only within the same flow; edges are never
    mixed across flows. If one flow has several replies at the same TTL, the best
    RTT is kept instead of drawing every reply to every next hop. Multiple flows
    still show ECMP. Replies that never join an observed edge are omitted from the
    graph but remain in the method's semi-raw log. A failed trace simply ends at
    its last hop.
-4. **enrich** — `enrich.py` resolves every hop to its origin AS, fetches each
+5. **enrich** — `enrich.py` resolves every hop to its origin AS, fetches each
    AS's PeeringDB facilities/IXPs, and annotates every inter-AS link with a
    `handoff`: shared facilities/IXPs, whether the outgoing AS advertises the
    destination (RouteViews), plus peering evidence. For each inter-AS edge it
@@ -38,6 +44,7 @@ tools can disagree, so they are never merged.
 .venv/bin/python -m paths --db paths.db trace 41.222.2.1          # all tools -> 41.222.2.1.html
 .venv/bin/python -m paths --db paths.db trace 41.222.2.1 --tools mtr,traceroute
 .venv/bin/python -m paths --db paths.db trace 41.222.2.1 --text   # text summary, no HTML
+.venv/bin/python -m paths --db paths.db trace 41.222.2.1 --no-dest  # skip the aranya lookup
 .venv/bin/python -m paths --db paths.db ingest mtr.json --tool mtr --target 41.222.2.1
 .venv/bin/python -m paths --db paths.db show
 .venv/bin/python -m paths --db paths.db html --target 41.222.2.1 -o paths.html

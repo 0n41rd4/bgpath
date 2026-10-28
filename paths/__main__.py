@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
+import urllib.request
 
 import paths.analysis as analysis
 import paths.enrich as enrich
@@ -34,8 +36,21 @@ def _run_id(target: str) -> str:
     return f"{target}@{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.{os.urandom(2).hex()}"
 
 
-def _build_interface(conn, run_id):
-    graph = graphlib.interface_graph(store.load_hops(conn, run_id))
+def get_public_ip() -> str | None:
+    """Public egress IP via an external echo service (NAT hides it locally)."""
+    for url in ("https://api.ipify.org", "https://ifconfig.me", "https://ipv4.icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                ip = response.read().decode("utf-8", "replace").strip()
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+                return ip
+        except Exception:
+            continue
+    return None
+
+
+def _build_interface(conn, run_id, vantage=None):
+    graph = graphlib.interface_graph(store.load_hops(conn, run_id), vantage=vantage)
     store.clear_layer(conn, run_id, "interface")
     graphlib.persist(conn, run_id, graph)
     return graph
@@ -76,6 +91,48 @@ def _capture_tool(tool, target, flows, maxttl, protocols):
     return started, hops, meta
 
 
+def destination_summary(target: str, db: str | None = None) -> dict:
+    """Run the `aranya <IP>` lookup on the destination and reduce it to a header.
+
+    Reuses the main aranya pipeline (`aranya.run_all`) and the report's claim
+    aggregation (`report.aggregate.cell_summaries`) so the path report shows the
+    same facts the standalone lookup does.
+    """
+    import aranya
+    from registry import store as raw_store
+    from report import aggregate
+
+    sources.load_env()
+    conn = raw_store.open_store(db or aranya._default_db())
+    try:
+        aranya.run_all(conn, target)
+        summaries = aggregate.cell_summaries(conn, target)
+    finally:
+        conn.close()
+
+    by = {(summary["topic"], summary["key"]): summary for summary in summaries}
+
+    def consensus(topic, key):
+        summary = by.get((topic, key))
+        return summary["consensus"] if summary else None
+
+    location = by.get(("location", "claim"))
+    location_values = 0
+    if location:
+        location_values = sum(location.get("counts", {}).values()) or len(location.get("labels", []))
+    return {
+        "ip": target,
+        "location": consensus("location", "claim"),
+        "location_verdict": location["verdict_label"] if location else None,
+        "anycast_like": location_values > 1,
+        "location_values": location_values,
+        "prefix": consensus("ownership", "prefix"),
+        "asn": consensus("ownership", "asn"),
+        "name": consensus("ownership", "holder") or consensus("ownership", "name"),
+        "rpki": consensus("routing", "rpki"),
+    }
+
+
 def run_target(
     target: str,
     tools: list[str] | None = None,
@@ -87,9 +144,30 @@ def run_target(
     do_enrich: bool = True,
     no_cache: bool = False,
     text: bool = False,
+    do_dest: bool = True,
 ) -> int:
     if no_cache:
         os.environ["PATHS_CACHE"] = "off"
+
+    dest: dict | None = None
+    if do_dest:
+        try:
+            print(f"aranya lookup: {target}")
+            dest = destination_summary(target)
+            bits = [target]
+            if dest.get("name"):
+                bits.append(f"{dest['name']}" + (f" (AS{dest['asn']})" if dest.get("asn") else ""))
+            if dest.get("prefix"):
+                bits.append(dest["prefix"])
+            if dest.get("location"):
+                bits.append(dest["location"])
+            print("  " + " · ".join(bits))
+        except Exception as exc:
+            print(f"  destination lookup failed: {exc}")
+            dest = None
+
+    dest_asn = str(dest["asn"]) if dest and dest.get("asn") else None
+
     tools = tools if tools is not None else _available_tools()
     if not tools:
         print("no traceroute tools available (scamper/dublin/voyage/mtr/traceroute)")
@@ -104,6 +182,13 @@ def run_target(
         print(f"  ping: unreachable  loss {ping['loss_percent']}% (tracing anyway)")
 
     conn = store.open_store(db)
+    public_ip = None
+    try:
+        public_ip = get_public_ip()
+        if public_ip:
+            print(f"  public IP: {public_ip}")
+    except Exception:
+        public_ip = None
     run_ids: list[str] = []
     for tool in tools:
         try:
@@ -128,6 +213,8 @@ def run_target(
             print(f"  {tool}: no hops")
             continue
         meta["ping"] = ping
+        meta["vantage"] = public_ip or meta.get("vantage")
+        meta["dest_asn"] = dest_asn
         run_id = _run_id(target)
         store.save_run(
             conn,
@@ -135,7 +222,7 @@ def run_target(
              "tool": meta.get("tool", tool), "started_at": started, "meta": meta},
         )
         store.save_hops(conn, run_id, hops)
-        graph = _build_interface(conn, run_id)
+        graph = _build_interface(conn, run_id, vantage=public_ip)
         summary = graphlib.summary(graph)
         reach = analysis.reachability(hops, target)
         status = "reached" if reach["reached"] else "not reached"
@@ -154,7 +241,7 @@ def run_target(
         conn.close()
         return 0
 
-    html = paths_export.render_html(conn, run_ids)
+    html = paths_export.render_html(conn, run_ids, dest=dest)
     conn.close()
     out = output or f"{target}.html"
     with open(out, "w", encoding="utf-8") as handle:
@@ -177,6 +264,7 @@ def cmd_trace(args) -> int:
         do_enrich=not args.no_enrich,
         no_cache=args.no_cache,
         text=args.text,
+        do_dest=not args.no_dest,
     )
 
 
@@ -294,6 +382,7 @@ def run_path(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", help="HTML output path (default <target>.html)")
     parser.add_argument("--no-enrich", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--no-dest", action="store_true", help="skip the aranya lookup of the destination")
     parser.add_argument("--text", action="store_true", help="print the text summary instead of HTML")
     parser.add_argument("--clear", nargs="?", const="", metavar="TARGET", help="empty the whole paths DB (or just TARGET) and exit")
     args = parser.parse_args(argv)
@@ -334,6 +423,7 @@ def run_path(argv: list[str] | None = None) -> int:
         do_enrich=not args.no_enrich,
         no_cache=args.no_cache,
         text=args.text,
+        do_dest=not args.no_dest,
     )
 
 
@@ -355,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
     trace.add_argument("--maxttl", type=int, default=32)
     trace.add_argument("-o", "--output", help="HTML output path (default <target>.html)")
     trace.add_argument("--text", action="store_true", help="print text summary instead of HTML")
+    trace.add_argument("--no-dest", action="store_true", help="skip the aranya lookup of the destination")
     trace.set_defaults(func=cmd_trace)
 
     ing = sub.add_parser("ingest", parents=[common], help="ingest traceroute output from another tool")

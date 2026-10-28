@@ -7,25 +7,57 @@ the full brief.
 
 Phase 1 (fetch + raw store + observations), phase 2 (comparison + HTML report),
 phase 3 (more sources), phase 4 (entity normalization) and phase 5 (cross-IP
-analysis) are implemented. 21 always-on sources + PeeringDB facility/IX follow-ups +
-5 optional query an IP in dependency waves; raw responses land in the `fetches`
-table, normalized claims in the `observations` table.
+analysis) are implemented. 22 always-on sources query an IP in dependency waves,
+plus 2 PeeringDB follow-ups and 6 optional sources; raw responses land in the
+`fetches` table, normalized claims in the `observations` table.
+
+## Install
+
+Requires Python 3.10+. From the checkout:
+
+```sh
+pipx install --editable .        # puts `aranya` on PATH (editable)
+# or, in a virtualenv:
+pip install -e .
+```
+
+`python3 aranya.py ...` also works straight from the checkout, without
+installing. Run the test suite with `python3 -m unittest discover -s tests`
+(fully offline).
+
+## Credentials
+
+Everything runs keyless by default. Optional sources read credentials from the
+shell or from the gitignored `scripts/.aranya.env` (the shell wins):
+
+```sh
+cp scripts/.aranya.env.example scripts/.aranya.env
+chmod 600 scripts/.aranya.env
+# edit and fill in the tokens/keys you want
+```
+
+Geo-IP databases go under `data/` and are refreshed with `aranya --update-dbs`.
+See the [Optional sources](#optional-sources) table below for which variable
+goes where.
 
 ## Usage
 
 ```sh
-pipx install --editable .                      # puts `aranya` on PATH (editable)
 aranya 8.8.8.8 [--db FILE]                     # fetch all sources, print observations
-aranya 8.8.8.8 --dump                          # per-source raw output; dumps/last -> latest timestamp
 aranya 8.8.8.8 -v                              # per-source progress on stderr
+aranya 8.8.8.8 --dump                          # per-source raw output; dumps/last -> latest timestamp
 aranya --ips 8.8.8.8,1.1.1.1 --dump            # one timestamp folder, one subfolder per IP
-aranya path 8.8.8.8                            # ping + traceroute (all tools) -> HTML report
+aranya 8.8.8.8 --report                        # facts + contested claims for one IP (no fetch)
+aranya --report --ips 8.8.8.8,1.1.1.1          # comparison table
+aranya --export FILE [--ips 8.8.8.8,...]       # write the JSON contract (no fetch)
+aranya --html FILE [--ips 8.8.8.8,...]         # write a self-contained HTML report
+aranya 8.8.8.8 --entities                      # ownership entity + aliases
+aranya path 8.8.8.8                            # aranya lookup + traceroute (all tools) -> HTML report
 aranya path --clear                            # empty the path database
 aranya path --clear 8.8.8.8                    # remove just that target's path runs
 aranya --update-dbs                            # refresh the MaxMind/DB-IP .mmdb files
 aranya --clear                                 # empty the whole database and exit
 aranya --clear 8.8.8.8                         # empty just that IP and exit
-python3 -m unittest discover -s tests          # 107 tests, fully offline
 ```
 
 Each dump source folder contains `output.txt` (raw body), `raw_output.json`
@@ -42,8 +74,6 @@ The database defaults to `~/.local/share/aranya/aranya.db`
 (`$XDG_DATA_HOME/aranya/aranya.db`), independent of the working directory.
 Override with `--db` or `ARANYA_DB`. An older `./aranya.db` is not picked up
 automatically; pass `--db ./aranya.db` or move it into place.
-
-`python3 aranya.py ...` still works from the checkout.
 
 ## Report
 

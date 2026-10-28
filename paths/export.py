@@ -113,12 +113,16 @@ def build(conn, run_id: str) -> dict:
     target = run.get("target")
     nodes = _nodes(conn)
     edges = _edges(conn, run_id)
-    ttl = _hop_ttl(conn, run_id)
+    hop_ttl = _hop_ttl(conn, run_id)
+    ttl = hop_ttl
     rtt = _hop_rtt(conn, run_id)
     raw = _raw_hops(conn, run_id)
     endpoints = {edge["source"] for edge in edges} | {edge["target"] for edge in edges}
     if endpoints:
         ttl = {ip: value for ip, value in ttl.items() if ip in endpoints}
+        vantage = run.get("vantage")
+        if vantage and vantage in endpoints and vantage not in hop_ttl:
+            ttl[vantage] = 0
 
     columns: dict[int, list[str]] = {}
     for ip in ttl:
@@ -128,6 +132,15 @@ def build(conn, run_id: str) -> dict:
         members = sorted(columns[ttl_value])
         for row, ip in enumerate(members):
             position[ip] = (ORIGIN_X + row * COL_GAP, ORIGIN_Y + col * ROW_GAP)
+
+    mpls_by_ip: dict[str, list] = {}
+    for hop in raw:
+        labels = hop.get("mpls") or []
+        if labels:
+            mpls_by_ip.setdefault(hop["src_ip"], [])
+            for label in labels:
+                if label not in mpls_by_ip[hop["src_ip"]]:
+                    mpls_by_ip[hop["src_ip"]].append(label)
 
     hops = []
     for ip in sorted(position, key=lambda value: (ttl.get(value, 0), value)):
@@ -152,6 +165,7 @@ def build(conn, run_id: str) -> dict:
                 "bgp_prefix": attrs.get("bgp_prefix"),
                 "bgp_country": attrs.get("bgp_country"),
                 "bgp_name": attrs.get("bgp_name"),
+                "mpls": mpls_by_ip.get(ip, []),
                 "is_target": ip == target,
                 "rtt_ms": rtt.get(ip),
             }
@@ -169,11 +183,21 @@ def build(conn, run_id: str) -> dict:
                 "source": src,
                 "target": dst,
                 "gap": bool(attrs.get("gap")),
+                "span": attrs.get("span"),
                 "from_as": nodes.get(src, {}).get("asn"),
                 "to_as": nodes.get(dst, {}).get("asn"),
                 "handoff": handoff,
                 "peering": bool(handoff and handoff.get("confirmed")),
             }
+        )
+
+    dest_asn = (run.get("meta") or {}).get("dest_asn")
+    reached_as = None
+    if dest_asn:
+        reached_as = any(
+            hop["asn"] == str(dest_asn) and hop["id"] != run.get("vantage")
+            for hop in hops
+            if hop.get("asn")
         )
 
     return {
@@ -184,6 +208,8 @@ def build(conn, run_id: str) -> dict:
             "tool": run.get("tool"),
             "started_at": run.get("started_at"),
             "meta": run.get("meta") or {},
+            "dest_asn": str(dest_asn) if dest_asn else None,
+            "reached_as": reached_as,
         },
         "ping": run.get("meta", {}).get("ping"),
         "reachability": analysis.reachability(raw, target),
@@ -193,7 +219,7 @@ def build(conn, run_id: str) -> dict:
     }
 
 
-def build_graphs(conn, run_ids: list[str]) -> dict:
+def build_graphs(conn, run_ids: list[str], dest: dict | None = None) -> dict:
     graphs = []
     target = None
     for run_id in run_ids:
@@ -206,7 +232,7 @@ def build_graphs(conn, run_ids: list[str]) -> dict:
                 "label": f"{run.get('tool') or '?'} · {run.get('target') or '?'}",
             }
         )
-    return {"target": target, "graphs": graphs}
+    return {"target": target, "dest": dest, "graphs": graphs}
 
 
 def _embed(data: dict) -> str:
@@ -214,8 +240,8 @@ def _embed(data: dict) -> str:
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
-def render_html(conn, run_ids) -> str:
+def render_html(conn, run_ids, dest: dict | None = None) -> str:
     if isinstance(run_ids, str):
         run_ids = [run_ids]
     template = TEMPLATE.read_text()
-    return template.replace("/*__PATHS_DATA__*/", _embed(build_graphs(conn, list(run_ids))))
+    return template.replace("/*__PATHS_DATA__*/", _embed(build_graphs(conn, list(run_ids), dest=dest)))
