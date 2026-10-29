@@ -591,3 +591,43 @@ class ClearTest(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()) as out:
                     self.assertEqual(paths_cli.run_path(["--db", db, "--clear"]), 0)
                 self.assertIn("(all)", out.getvalue())
+
+
+class HiddenAsnsTest(unittest.TestCase):
+    def test_between_asns(self):
+        paths = [
+            {"as_path": "52873 12956 9002 45430 137557 4618"},
+            {"as_path": "12956 3356 45430 4618"},
+        ]
+        self.assertEqual(topology.hidden_asns("12956", "45430", paths), ["3356", "9002"])
+        self.assertEqual(topology.hidden_asns("45430", "4618", paths), ["137557"])
+        self.assertEqual(topology.hidden_asns("123", "999", paths), [])
+
+    @unittest.skipUnless(HAVE_NX, "networkx not installed")
+    def test_expand_records_hidden_on_gap_edge(self):
+        gap_hops = [
+            {"flow_id": 1, "ttl": 1, "src_ip": "10.0.0.1", "rtt_ms": 1.0, "protocol": "udp", "tool": "scamper"},
+            {"flow_id": 1, "ttl": 4, "src_ip": "10.0.0.3", "rtt_ms": 4.0, "protocol": "udp", "tool": "scamper"},
+        ]
+        with mock.patch.object(query, "asn_of", lambda ip: {"asn": "1" if ip == "10.0.0.1" else "3", "source": "cymru.origin"}), \
+             mock.patch.object(query, "as_name", lambda asn: {"1": "AS One", "3": "AS Three"}.get(asn)), \
+             mock.patch.object(query, "geo", lambda ip: None), \
+             mock.patch.object(query, "hostname", lambda ip: None), \
+             mock.patch.object(query, "bgp_tools", lambda ip: {}), \
+             mock.patch.object(topology, "neighbour_map", lambda asn: {}), \
+             mock.patch.object(topology, "target_paths", lambda ip, prefix=None, with_bgproutes=True: [
+                 {"source": "RouteViews", "as_path": "1 2 3", "detail": "collector"},
+             ]), \
+             mock.patch.object(query, "peeringdb_net", lambda asn: None), \
+             mock.patch.object(bgp, "owns", lambda asn, ip, prefixes=None: False):
+            with tempfile.TemporaryDirectory() as tmp:
+                conn = store.open_store(os.path.join(tmp, "p.db"))
+                graph = graphlib.interface_graph(gap_hops)
+                enrich.expand(conn, "r1", graph, "10.0.0.3")
+                row = conn.execute(
+                    "SELECT attrs FROM edges WHERE run_id = 'r1' AND layer = 'interface' "
+                    "AND src = '10.0.0.1' AND dst = '10.0.0.3'"
+                ).fetchone()
+                conn.close()
+        handoff = json.loads(row[0])["handoff"]
+        self.assertEqual(handoff["hidden_asns"], [{"asn": "2", "name": None}])

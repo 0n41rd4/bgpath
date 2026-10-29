@@ -44,6 +44,7 @@ CLAIM_LABELS = {
     ("latency", "probe"): "Latency",
     ("probes", "count"): "Atlas probes",
     ("probes", "country"): "Probe countries",
+    ("anchors", "count"): "Atlas anchors",
 }
 
 
@@ -85,6 +86,7 @@ CLAIM_DESCRIPTIONS = {
     ("latency", "probe"): "Ping measurements from individual probes to this IP.",
     ("probes", "count"): "Number of RIPE Atlas probes in the AS.",
     ("probes", "country"): "Countries of RIPE Atlas probes in the AS.",
+    ("anchors", "count"): "Number of RIPE Atlas anchors in the AS.",
 }
 
 
@@ -99,6 +101,7 @@ AS_CLAIMS = {
     ("neighbours", "list"),
     ("probes", "count"),
     ("probes", "country"),
+    ("anchors", "count"),
     ("directory", "net_id"),
     ("directory", "website"),
     ("directory", "info_type"),
@@ -180,6 +183,7 @@ PRIORITY = {
     ("ix", "prefix"): 51,
     ("probes", "count"): 60,
     ("probes", "country"): 61,
+    ("anchors", "count"): 62,
     ("identity", "ports"): 1,
     ("identity", "os"): 2,
     ("identity", "cpes"): 3,

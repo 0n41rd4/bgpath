@@ -2,7 +2,7 @@
 
 Evidence layer over public internet-infrastructure data. Produces two
 self-contained HTML reports: an **IP** report and a **path** report (the main
-one). See `../proj.txt` for the full brief.
+one).
 
 ## Install
 

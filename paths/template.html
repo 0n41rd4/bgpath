@@ -56,7 +56,7 @@
   .edge.same .line { stroke:var(--gray); }
   .edge.cross .line { stroke:var(--blue); }
   .edge.peering .line { stroke:var(--green); stroke-width:2.5; }
-  .gapcount { fill:var(--muted); font-size:10px; font-family:ui-monospace, monospace; pointer-events:none; }
+  .gapcount { fill:var(--muted); font-size:10px; font-family:ui-monospace, monospace; pointer-events:none; paint-order:stroke; stroke:#fff; stroke-width:3px; stroke-linejoin:round; }
   #panel { width:340px; flex:0 0 340px; padding:16px; position:sticky; top:0; height:100vh; overflow:auto; border-left:1px solid var(--line); background:#fff; }
   #panel h3 { margin:0 0 8px; font-size:14px; }
   #panel dl { margin:0; }
@@ -78,6 +78,7 @@
   .card.dest dt[data-claim]:hover, .card.dest dd[data-claim]:hover { color:var(--blue); }
   #panel dt[data-prov], #panel dd[data-prov] { cursor:pointer; }
   #panel dt[data-prov]:hover, #panel dd[data-prov]:hover { color:var(--blue); }
+  #panel .rawlink { color:var(--blue); cursor:pointer; text-decoration:underline; font-size:12px; }
   #panel .obs { border:1px solid var(--line); border-radius:6px; margin:6px 0; }
   #panel .obs > summary { cursor:pointer; padding:4px 6px; }
   #panel .obs .obsbody { padding:0 6px 6px; }
@@ -121,6 +122,19 @@ const NW = 150, NH = 34;
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 function asLabel(asn, name){ return name ? (asn ? name + " AS" + asn : name) : (asn ? "AS" + asn : ""); }
+
+function fit(s, max){ s = s == null ? "" : String(s); return s.length > max ? s.slice(0, Math.max(max - 1, 1)) + "…" : s; }
+
+function boxAsLabel(hop){
+  const asn = hop.asn ? "AS" + hop.asn : "";
+  const name = hop.as_name ? String(hop.as_name) : "";
+  const mpls = hop.mpls && hop.mpls.length ? " · MPLS" : "";
+  const tail = (asn ? " " + asn : "") + mpls;
+  if (!name) return fit(asn + mpls, 22);
+  const budget = 22 - tail.length;
+  if (budget < 2) return fit(name + tail, 22);
+  return name.length > budget ? name.slice(0, budget - 1) + "…" + tail : name + tail;
+}
 
 function pingText(p){
   if (!p) return "ping: n/a";
@@ -200,18 +214,19 @@ function renderGraph(g){
     g2.setAttribute("tabindex","0");
     g2.setAttribute("focusable","true");
     g2.setAttribute("role","button");
-    const asLabelText = asLabel(hop.asn, hop.as_name);
-    g2.setAttribute("aria-label",`${hop.id}${asLabelText ? ", "+asLabelText : ""}`);
+    const fullAs = asLabel(hop.asn, hop.as_name);
+    const asLabelText = boxAsLabel(hop);
+    g2.setAttribute("aria-label",`${hop.id}${fullAs ? ", "+fullAs : ""}`);
     const tip = document.createElementNS("http://www.w3.org/2000/svg","title");
-    tip.textContent = "Click for hop details";
+    tip.textContent = hop.id + (fullAs ? " · " + fullAs : "");
     const rect = document.createElementNS("http://www.w3.org/2000/svg","rect");
     rect.setAttribute("width",NW); rect.setAttribute("height",NH);
     const t1 = document.createElementNS("http://www.w3.org/2000/svg","text");
     t1.setAttribute("class","ip"); t1.setAttribute("x",8); t1.setAttribute("y",14);
-    t1.textContent = hop.id;
+    t1.textContent = fit(hop.id, 22);
     const t2 = document.createElementNS("http://www.w3.org/2000/svg","text");
     t2.setAttribute("class","as"); t2.setAttribute("x",8); t2.setAttribute("y",28);
-    t2.textContent = asLabelText + (hop.mpls && hop.mpls.length ? " · MPLS" : "");
+    t2.textContent = asLabelText;
     g2.appendChild(tip); g2.appendChild(rect); g2.appendChild(t1); g2.appendChild(t2);
     const select = () => {
       svg.querySelectorAll(".node.selected").forEach(n => n.classList.remove("selected"));
@@ -295,6 +310,15 @@ function showNode(h){
     const value = `AS${h.bgp_asn}${h.bgp_prefix ? " · " + h.bgp_prefix : ""}${h.bgp_country ? " · " + h.bgp_country : ""}${agree ? " · agrees" : " · differs"}`;
     prov("bgp.tools", value, ["bgp.tools"]);
   }
+  if (h.atlas_probes != null || h.atlas_anchors != null){
+    const bits = [];
+    if (h.atlas_probes != null) bits.push(h.atlas_probes + " probes");
+    if (h.atlas_anchors != null) bits.push(h.atlas_anchors + " anchors" + (h.atlas_connected != null ? " (" + h.atlas_connected + " connected)" : ""));
+    rows.push(`<dt>RIPE Atlas</dt><dd>${esc(bits.join(" · ") || "none")} in this AS</dd>`);
+  }
+  if (h.atlas_traceroutes && h.atlas_traceroutes.length){
+    rows.push(atlasRows(h.atlas_traceroutes));
+  }
   if (h.latitude != null && h.longitude != null){
     found("coordinates", Number(h.latitude).toFixed(4) + ", " + Number(h.longitude).toFixed(4));
   }
@@ -331,11 +355,18 @@ function showEdge(e, g){
       else if (s.includes(rev)) s = s.replace(rev, `<b>${rev}</b>`);
       return s;
     };
-    rows.push(`<dt data-prov-label="observed adjacency" data-prov="${esc(BGP_SOURCES.join(","))}">observed adjacency</dt><dd class="meta">AS paths toward the destination (route collectors) where AS${esc(h.from_as)} → AS${esc(h.to_as)} are adjacent:</dd><dd><ul>` +
+    const dstTarget = (g && g.run && g.run.target) || "";
+    rows.push(`<dt data-prov-label="observed adjacency" data-prov="${esc(BGP_SOURCES.join(","))}">observed adjacency</dt><dd class="meta">BGP route advertisements toward ${esc(dstTarget)} (RouteViews / RIPE RIS / bgproutes.io); the bold pair is this edge, the last AS in each path is the origin:</dd><dd><ul>` +
       h.adjacency.map(a=>`<li>${esc(a.source)}${a.vp_label ? " · " + esc(a.vp_label) : ""} · <code>${hl(a.as_path)}</code></li>`).join("") +
       `</ul></dd>`);
   } else {
     missing.push("AS-path adjacency");
+  }
+  if (h.hidden_asns && h.hidden_asns.length){
+    rows.push(`<dt>hidden traversal</dt><dd>${h.hidden_asns.map(x=>x.name ? esc(x.name)+" AS"+esc(x.asn) : "AS"+esc(x.asn)).join(", ")} — traversed invisibly (MPLS / intra-AS)</dd>`);
+  }
+  if (h.atlas_traceroutes && h.atlas_traceroutes.length){
+    rows.push(atlasRows(h.atlas_traceroutes));
   }
   if (h.next_hop){
     const nh = h.next_hop;
@@ -344,11 +375,17 @@ function showEdge(e, g){
   const ris = h.ris || {};
   if (h.neighbours){
     const bits = [];
-    if (ris.v4_peers != null) bits.push(ris.v4_peers + " v4 peers");
-    if (ris.v6_peers != null) bits.push(ris.v6_peers + " v6 peers");
-    rows.push(`<dt>RIS neighbour</dt><dd>yes — AS${esc(h.from_as)} ↔ AS${esc(h.to_as)}${bits.length ? " · " + esc(bits.join(" · ")) : ""}</dd>`);
+    if (ris.direction === "upstream") bits.push(`AS${h.to_as} is an upstream (provider) of AS${h.from_as}`);
+    else if (ris.direction === "downstream") bits.push(`AS${h.to_as} is a downstream (customer) of AS${h.from_as}`);
+    else bits.push(`AS${h.from_as} ↔ AS${h.to_as}`);
+    if (ris.power != null) bits.push("seen in " + ris.power + " AS paths");
+    const peers = [];
+    if (ris.v4_peers != null) peers.push(ris.v4_peers + " v4");
+    if (ris.v6_peers != null) peers.push(ris.v6_peers + " v6");
+    if (peers.length) bits.push(peers.join("/") + " RIS collectors");
+    rows.push(`<dt>RIS adjacency</dt><dd class="meta">RIPE RIS sees the two ASes as direct BGP neighbours:</dd><dd>${esc(bits.join(" · "))}</dd>`);
   } else {
-    rows.push(`<dt>RIS neighbour</dt><dd>no</dd>`);
+    rows.push(`<dt>RIS adjacency</dt><dd>no</dd>`);
     missing.push("RIS neighbour pair");
   }
   if (h.ixp && (h.ixp.src || h.ixp.dst)){
@@ -389,6 +426,27 @@ function showEdge(e, g){
   const missingHtml = missing.length
     ? `<div class="missing">not found: ${esc(missing.join(" · "))}</div>` : "";
   p.innerHTML = `<h3>${esc(title)}</h3><dl>` + rows.join("") + `</dl>` + missingHtml;
+}
+
+function renderPathOverview(po){
+  if (!po || !po.tools) return null;
+  const card = document.createElement("div");
+  card.className = "card dest";
+  const rows = [];
+  const add = (label, value) => { if (value != null && value !== "") rows.push(`<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`); };
+  add("reachability", `${po.reached} of ${po.tools} tools reached ${esc(po.target)}`);
+  const asText = (po.as_path||[]).map(a=>a.name ? `${esc(a.name)} AS${esc(a.asn)}` : "AS"+esc(a.asn)).join(" → ");
+  add("AS path", asText);
+  add("countries", (po.countries||[]).map(esc).join(" → "));
+  let consensus = "";
+  if (po.total_paths >= 2){
+    consensus = po.agree === po.total_paths
+      ? `all ${po.total_paths} tools agree on the AS path`
+      : `${po.agree} of ${po.total_paths} tools agree on the AS path`;
+  }
+  add("consensus", consensus);
+  card.innerHTML = `<h2>path overview</h2><dl>${rows.join("")}</dl>`;
+  return card;
 }
 
 function renderDest(d){
@@ -433,6 +491,7 @@ const AS_SOURCES = ["cymru.origin", "ripestat.network-info", "bgp.tools"];
 const GEO_SOURCES = ["ipwho.is", "ip.guide"];
 const BGP_SOURCES = ["routeviews.prefix", "ris.looking-glass", "bgproutes.prefix"];
 let provList = [];
+let atlasList = [];
 function showProvenance(label, fetches){
   const p = document.getElementById("panel");
   let html = `<h3>${esc(label)}</h3>`;
@@ -449,6 +508,20 @@ function showProvenance(label, fetches){
     html += `</div></details>`;
   }
   p.innerHTML = html;
+}
+function atlasRows(list){
+  atlasList = list || [];
+  let html = `<dt>RIPE Atlas traceroutes</dt><dd class="meta">existing public traceroutes toward the destination (read-only):</dd>`;
+  list.forEach((t, i) => {
+    const hops = (t.hops||[]).map(h => (h.ips||[])[0]).filter(Boolean);
+    const hopsText = hops.length ? hops.slice(0, 8).join(" → ") + (hops.length > 8 ? " …" : "") : "(no responders)";
+    html += `<dd><span class="meta">from ${esc(t.from || "?")}${t.asn ? " · AS" + esc(t.asn) : ""} · ${hops.length} hops</span> <span class="rawlink" data-atlas-idx="${i}">raw</span><br><span class="meta">${esc(hopsText)}</span></dd>`;
+  });
+  return html;
+}
+function showRawJson(item){
+  const p = document.getElementById("panel");
+  p.innerHTML = `<h3>RIPE Atlas traceroute ${esc(item.msm_id)}</h3><pre class="log" style="max-height:70vh;overflow:auto">${esc(JSON.stringify(item.raw, null, 2))}</pre>`;
 }
 function el(tag, cls, text){ const n=document.createElement(tag); if(cls) n.className=cls; if(text!==undefined) n.textContent=text; return n; }
 
@@ -503,6 +576,8 @@ function showDestClaim(c){
 const container = document.getElementById("graphs");
 const dest = renderDest(DATA.dest);
 if (dest) container.appendChild(dest);
+const po = renderPathOverview(DATA.path_overview);
+if (po) container.appendChild(po);
 for (const g of DATA.graphs){ container.appendChild(renderGraph(g)); }
 
 const navGraphs = document.getElementById("nav-graphs");
@@ -526,6 +601,12 @@ if (DEST_HTML){
 navGraphs.addEventListener("click", ()=>setView("graphs"));
 navDest.addEventListener("click", ()=>setView("dest"));
 document.getElementById("panel").addEventListener("click", (ev) => {
+  const raw = ev.target.closest("[data-atlas-idx]");
+  if (raw){
+    const item = atlasList[Number(raw.getAttribute("data-atlas-idx"))];
+    if (item) showRawJson(item);
+    return;
+  }
   const t = ev.target.closest("[data-prov]");
   if (!t) return;
   const label = t.getAttribute("data-prov-label") || "provenance";

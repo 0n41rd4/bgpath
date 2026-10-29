@@ -169,6 +169,10 @@ def build(conn, run_id: str) -> dict:
                 "y": y,
                 "asn": attrs.get("asn"),
                 "as_name": attrs.get("as_name"),
+                "atlas_probes": attrs.get("atlas_probes"),
+                "atlas_anchors": attrs.get("atlas_anchors"),
+                "atlas_connected": attrs.get("atlas_connected"),
+                "atlas_traceroutes": attrs.get("atlas_traceroutes"),
                 "prefix": attrs.get("prefix"),
                 "country": attrs.get("country"),
                 "city": attrs.get("city"),
@@ -236,6 +240,63 @@ def build(conn, run_id: str) -> dict:
     }
 
 
+def _path_summary(graphs: list[dict], target: str | None) -> dict:
+    """Aggregate the per-tool graphs into one cross-tool path overview.
+
+    Countries are the first-appearance traversal order across tools. AS path is
+    the most common tool AS sequence (the consensus), falling back to
+    first-appearance order when every tool disagrees.
+    """
+    seqs: dict[str, tuple[str, ...]] = {}
+    country_order: list[str] = []
+    asn_order: list[str] = []
+    name_by_asn: dict[str, str] = {}
+    reached = 0
+    for graph in graphs:
+        tool = graph["run"]["tool"]
+        if graph.get("reachability", {}).get("reached"):
+            reached += 1
+        hops = sorted(
+            graph["hops"],
+            key=lambda h: (h.get("ttl") if h.get("ttl") is not None else 0, h.get("id")),
+        )
+        seq: list[str] = []
+        country_seq: list[str] = []
+        for hop in hops:
+            asn = hop.get("asn")
+            if asn is not None:
+                asn = str(asn)
+                if hop.get("as_name") and asn not in name_by_asn:
+                    name_by_asn[asn] = hop["as_name"]
+                if not seq or seq[-1] != asn:
+                    seq.append(asn)
+                if asn not in asn_order:
+                    asn_order.append(asn)
+            country = hop.get("country")
+            if country and (not country_seq or country_seq[-1] != country):
+                country_seq.append(country)
+        for country in country_seq:
+            if country not in country_order:
+                country_order.append(country)
+        seqs[tool] = tuple(seq)
+
+    counts: dict[tuple[str, ...], int] = {}
+    for seq in seqs.values():
+        if seq:
+            counts[seq] = counts.get(seq, 0) + 1
+    top_seq = max(counts, key=lambda seq: (counts[seq], len(seq)), default=None)
+    asn_list = list(top_seq) if top_seq else asn_order
+    return {
+        "target": target,
+        "tools": len(graphs),
+        "reached": reached,
+        "as_path": [{"asn": asn, "name": name_by_asn.get(asn)} for asn in asn_list],
+        "countries": country_order,
+        "agree": counts.get(top_seq, 0) if top_seq else 0,
+        "total_paths": len(seqs),
+    }
+
+
 def build_graphs(conn, run_ids: list[str], dest: dict | None = None) -> dict:
     graphs = []
     target = None
@@ -249,7 +310,12 @@ def build_graphs(conn, run_ids: list[str], dest: dict | None = None) -> dict:
                 "label": f"{run.get('tool') or '?'} · {run.get('target') or '?'}",
             }
         )
-    return {"target": target, "dest": dest, "graphs": graphs}
+    return {
+        "target": target,
+        "dest": dest,
+        "graphs": graphs,
+        "path_overview": _path_summary(graphs, target),
+    }
 
 
 def _embed(data: dict) -> str:

@@ -101,11 +101,16 @@ def _expand(conn, run_id, graph, target: str) -> dict:
     as_name: dict[str, str | None] = {}
     as_fac: dict[str, dict] = {}
     as_ix: dict[str, dict] = {}
+    as_vantage: dict[str, dict] = {}
     ip_ixp: dict[str, dict] = {}
     ix_nets: list[tuple[object, str]] = []
     for asn in sorted(asns):
         name = query.as_name(asn)
         as_name[asn] = name
+        try:
+            as_vantage[asn] = query.atlas_vantage(asn)
+        except Exception:
+            as_vantage[asn] = {}
         try:
             net_id = query.peeringdb_net(asn)
         except Exception:
@@ -185,6 +190,9 @@ def _expand(conn, run_id, graph, target: str) -> dict:
             {
                 "asn": asn,
                 "as_name": as_name.get(asn) if asn else None,
+                "atlas_probes": (as_vantage.get(asn) or {}).get("probes"),
+                "atlas_anchors": (as_vantage.get(asn) or {}).get("anchors"),
+                "atlas_connected": (as_vantage.get(asn) or {}).get("connected"),
                 "prefix": info.get("prefix"),
                 "country": geo.get("country"),
                 "city": geo.get("city"),
@@ -205,6 +213,13 @@ def _expand(conn, run_id, graph, target: str) -> dict:
         target_prefix = (query.asn_of(target) or {}).get("prefix")
     paths = topology.target_paths(target, prefix=target_prefix)
 
+    try:
+        atlas_traceroutes = query.atlas_traceroutes(target)
+    except Exception:
+        atlas_traceroutes = []
+    if atlas_traceroutes and target in graph:
+        store.set_node_attrs(conn, "interface", target, {"atlas_traceroutes": atlas_traceroutes})
+
     handoffs = 0
     for src, dst in graph.edges():
         a_asn = graph.nodes[src].get("asn")
@@ -215,7 +230,23 @@ def _expand(conn, run_id, graph, target: str) -> dict:
         adjacency = [
             entry for entry in paths if topology.contiguous(a_asn, b_asn, entry["as_path"])
         ]
-        relation = neighbours.get(a_asn, {}).get(b_asn) or neighbours.get(b_asn, {}).get(a_asn)
+        span = graph[src][dst].get("span", 1)
+        hidden_asns = []
+        if span > 1:
+            hidden_asns = [
+                {"asn": asn, "name": as_name.get(asn)}
+                for asn in topology.hidden_asns(a_asn, b_asn, paths)
+            ]
+        relation = neighbours.get(a_asn, {}).get(b_asn)
+        direction = None
+        if relation is not None:
+            # b_asn's position relative to a_asn: left = upstream/provider, right = downstream/customer
+            direction = {"left": "upstream", "right": "downstream"}.get(relation.get("type"))
+        else:
+            relation = neighbours.get(b_asn, {}).get(a_asn)
+            if relation is not None:
+                # a_asn's position relative to b_asn; invert for the edge's a→b direction
+                direction = {"left": "downstream", "right": "upstream"}.get(relation.get("type"))
         peering_neighbours = bool(relation)
         shared_fac = [
             {
@@ -256,9 +287,11 @@ def _expand(conn, run_id, graph, target: str) -> dict:
             },
             "announces_dest": announces,
             "adjacency": adjacency,
+            "hidden_asns": hidden_asns,
+            "atlas_traceroutes": atlas_traceroutes or None,
             "neighbours": peering_neighbours,
             "ris": {
-                "type": relation.get("type") if relation else None,
+                "direction": direction,
                 "power": relation.get("power") if relation else None,
                 "v4_peers": relation.get("v4_peers") if relation else None,
                 "v6_peers": relation.get("v6_peers") if relation else None,

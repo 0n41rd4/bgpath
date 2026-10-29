@@ -29,6 +29,26 @@ def contiguous(a, b, as_path) -> bool:
     return False
 
 
+def hidden_asns(a, b, paths: list[dict]) -> list[str]:
+    """ASNs that sit between `a` and `b` in observed AS paths toward the target.
+
+    When a traceroute jumps from AS `a` straight to AS `b` (a gap edge) but the
+    BGP paths toward the destination carry `a → … → b`, the ASes in between are
+    traversed but never appear as hops — hidden traversal (MPLS / intra-AS).
+    """
+    a, b = str(a), str(b)
+    hidden: set[str] = set()
+    for entry in paths:
+        tokens = as_path_tokens(entry.get("as_path"))
+        if a not in tokens or b not in tokens:
+            continue
+        ia = tokens.index(a)
+        ib = tokens.index(b)
+        if ia < ib:
+            hidden.update(tokens[ia + 1 : ib])
+    return sorted(hidden, key=lambda asn: (int(asn), asn))
+
+
 def neighbour_map(asn) -> dict[str, dict]:
     """RIS asn-neighbours entries keyed by neighbour ASN, with their stats."""
     try:

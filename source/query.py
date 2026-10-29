@@ -153,3 +153,104 @@ def ix_prefixes(ixlan_ids) -> list[dict]:
     if not ixlan_ids:
         return []
     return fetch_parsed("peeringdb.ixpfx", context={"ixlan_ids": list(ixlan_ids)}).get("prefixes") or []
+
+
+def atlas_vantage(asn) -> dict:
+    """RIPE Atlas vantage points hosted inside an AS, read-only (no credits).
+
+    Returns probe and anchor counts (and how many anchors are connected) so the
+    path report can point at backbones that host usable measurement points.
+    """
+    out: dict = {"probes": None, "anchors": None, "connected": None}
+    try:
+        out["probes"] = fetch_parsed("atlas.probes", context={"asn": str(asn)}).get("count")
+    except Exception:
+        pass
+    try:
+        anchors = fetch_parsed("atlas.anchors", context={"asn": str(asn)})
+        out["anchors"] = anchors.get("count")
+        out["connected"] = anchors.get("connected")
+    except Exception:
+        pass
+    return out
+
+
+def atlas_traceroutes(target) -> list[dict]:
+    """Existing public RIPE Atlas traceroute measurements toward `target`.
+
+    Read-only (no credits): reuses measurements other people already ran. The
+    measurement-list endpoint gives `{id, type, af, target_ip, creation_time,
+    participant_count}`; the per-measurement results endpoint gives one object
+    per probe with `prb_id`, `from` (probe public IP), `src_addr`, `dst_addr`
+    and `result` (a list of `{hop, result:[{from,rtt,…}]}` — the responders per
+    hop). Only the last ~6 days of results are retained, so entries are recent.
+    """
+    key = cache.make("query", "atlas.traceroute", target, "")
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    out: list[dict] = []
+    try:
+        status, body, error = sources.http_get(
+            f"https://atlas.ripe.net/api/v2/measurements/?target_ip={target}&type=traceroute&status=2&page_size=20"
+        )
+        if error:
+            return out
+        try:
+            measurements = json.loads(body).get("results") or []
+        except ValueError:
+            return out
+        now = int(time.time())
+        window_start = now - 6 * 86400
+        ordered = sorted(measurements, key=lambda m: m.get("creation_time") or 0, reverse=True)
+        for measurement in ordered[:10]:
+            mid = measurement.get("id")
+            if mid is None:
+                continue
+            rstatus, rbody, rerror = sources.http_get(
+                f"https://atlas.ripe.net/api/v2/measurements/{mid}/results/?format=json&start={window_start}&stop={now}"
+            )
+            if rerror:
+                continue
+            try:
+                results = json.loads(rbody)
+            except ValueError:
+                continue
+            if not isinstance(results, list):
+                continue
+            for result in results:
+                if not isinstance(result, dict) or result.get("type") != "traceroute":
+                    continue
+                from_ip = result.get("from")
+                asn = None
+                if from_ip:
+                    info = asn_of(from_ip)
+                    asn = info.get("asn") if info else None
+                hops = []
+                for hop in result.get("result") or []:
+                    if not isinstance(hop, dict):
+                        continue
+                    ips = [
+                        entry.get("from")
+                        for entry in (hop.get("result") or [])
+                        if isinstance(entry, dict) and entry.get("from")
+                    ]
+                    hops.append({"hop": hop.get("hop"), "ips": ips, "error": hop.get("error")})
+                out.append(
+                    {
+                        "msm_id": mid,
+                        "prb_id": result.get("prb_id"),
+                        "from": from_ip,
+                        "asn": str(asn) if asn is not None else None,
+                        "hops": hops,
+                        "raw": result,
+                    }
+                )
+                if len(out) >= 10:
+                    break
+            if len(out) >= 10:
+                break
+    except Exception:
+        pass
+    cache.put(key, out)
+    return out

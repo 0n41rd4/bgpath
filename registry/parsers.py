@@ -400,6 +400,19 @@ def atlas_probes(body: str) -> dict:
     return {"count": payload.get("count", len(probes)), "probes": probes, "countries": countries}
 
 
+def atlas_anchors(body: str) -> dict:
+    payload = _obj(body)
+    results = payload.get("results") or []
+    anchors = [
+        {"id": item.get("id"), "country": item.get("country_code"),
+         "status": (item.get("status") or {}).get("name")}
+        for item in results
+        if isinstance(item, dict)
+    ]
+    connected = sum(1 for anchor in anchors if anchor.get("status") == "Connected")
+    return {"count": payload.get("count", len(anchors)), "anchors": anchors, "connected": connected}
+
+
 def irr(body: str) -> dict:
     objects: list[dict] = []
     current: dict = {}
