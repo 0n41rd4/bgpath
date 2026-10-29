@@ -1,8 +1,7 @@
-# aranya
+# bgpath (aranya)
 
 Evidence layer over public internet-infrastructure data. Produces two
-self-contained HTML reports: an **IP** report and a **path** report (the main
-one).
+self-contained HTML reports: a **path** report and an **IP** report.
 
 ## Install
 
@@ -27,17 +26,17 @@ chmod 600 scripts/.aranya.env
 # fill in the keys you want
 ```
 
-| Key | Used by |
-|---|---|
-| `BGP_API_KEY` | bgproutes.io — extra BGP/RIB evidence in the IP and path reports |
-| `IPINFO_TOKEN` | IPinfo geolocation |
-| `SHODAN_API_KEY` | Shodan host API (paid; keyless `internetdb` already covers the free slice) |
-| `MAXMIND_LICENSE_KEY` | GeoLite2 database downloads (`aranya --update-dbs`) |
+| Key                   | Used by                                                                    |
+| --------------------- | -------------------------------------------------------------------------- |
+| `BGP_API_KEY`         | bgproutes.io — extra BGP/RIB evidence in the IP and path reports           |
+| `IPINFO_TOKEN`        | IPinfo geolocation                                                         |
+| `SHODAN_API_KEY`      | Shodan host API (paid; keyless `internetdb` already covers the free slice) |
+| `MAXMIND_LICENSE_KEY` | GeoLite2 database downloads (`aranya --update-dbs`)                        |
 
 Geo-IP databases live under `data/` (override `MAXMIND_DB` / `MAXMIND_ASN_DB` /
 `DBIP_DB`) and are refreshed with `aranya --update-dbs`.
 
-## Path report
+## IP & Path report
 
 ```sh
 aranya path 8.8.8.8                    # aranya lookup + traceroute -> 8.8.8.8.html
@@ -48,23 +47,19 @@ aranya path --clear                    # empty the path database
 ```
 
 Pings the target, then traceroutes it with every available tool (mtr,
-traceroute, scamper, dublin-traceroute, voyage — one graph each). Hops are
-enriched with origin AS, prefix, geolocation, PeeringDB facilities/IXPs, and BGP
-peering evidence. The destination header reuses the `aranya <IP>` lookup, and the
-full destination IP report is embedded behind the **destination report** toggle.
-See `paths/README.md` for the full flow.
+traceroute, scamper, dublin-traceroute, voyage — one graph each). IP claims are grouped
+by importance (IP facts, BGP routes, AS, identity, latency), with per-source provenance
+and embedded raw fetch bodies. Sources are ranked side by side rather than collapsed to
+one answer. Traceroute hops are enriched with origin AS, prefix, geolocation, PeeringDB
+facilities/IXPs, and BGP peering evidence. See `paths/README.md` for the full flow.
 
-## IP report
+## IP report only
 
 ```sh
 aranya 8.8.8.8                        # fetch one IP (all sources, keyless by default)
 aranya --html report.html             # every stored IP -> self-contained HTML
 aranya --html report.html --ips 8.8.8.8,1.1.1.1
 ```
-
-Claims are grouped by importance (IP facts, BGP routes, AS, identity, latency),
-with per-source provenance and embedded raw fetch bodies. Disagreement is the
-signal: sources are ranked side by side rather than collapsed to one answer.
 
 ## Data locations
 
